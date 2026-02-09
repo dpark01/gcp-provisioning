@@ -22,111 +22,91 @@ We want generalized cost reporting for any GCP Billing Account at the Broad. Sta
 
 **Labels in billing export are retroactive** — they reflect current project label state across all historical rows, so adding a `team` label now will group historical data correctly.
 
-## Plan
+## Completed (2026-02-09)
 
-### Step 1: Create BQ dataset and billing account name mapping table
+### Step 1: BQ dataset + mapping table -- DONE
+- Created dataset `gcid-data-core.custom_sada_billing_views`
+- Created and ran `billing-reporting/refresh-billing-account-names.sh` — loaded 20 billing accounts
+- `gcloud billing accounts list` returns 20 accounts vs 534 in the SADA export; LEFT JOIN handles missing names (NULL)
+- Script uses `--force` flag for idempotent dataset creation
+- Note: `gcloud projects update --update-labels` does NOT work in the base SDK; must use Cloud Resource Manager REST API for project labels
 
-Create dataset `gcid-data-core.custom_sada_billing_views` and a mapping table `billing_account_names`.
+### Step 2: Label `gcid-malaria` -- DONE (pending export refresh)
+- Applied `team=malaria` via Cloud Resource Manager REST API (confirmed on project)
+- Billing export still shows `team=NULL` as of 2026-02-09 — awaiting export refresh
 
-**Refresh script:** `refresh-billing-account-names.sh`
-- Pulls display names via `gcloud billing accounts list`
-- Loads into BQ mapping table (full replace)
-- Run a couple times a year or when accounts are added/renamed
+### Step 3: Summary view -- DONE (needs revision, see TODO #1)
+- Created `billing_account_summary` view (SQL in `billing-reporting/create-summary-view.sql`)
+- Covers ALL 534 billing accounts; no time scoping currently
 
-**Table schema (`billing_account_names`):**
-- `billing_account_id` STRING
-- `display_name` STRING
-- `refreshed_at` TIMESTAMP
+### Step 4: Exploratory queries -- DONE
+- All 6 queries (a-f) ran successfully. Key findings:
+  - 5008388 (SADA): $12.7K/14d, Feb 1 spike to $4K. Top: `broad-hvp-dasc` ($8.3K)
+  - 5008157: $6K/14d. Top: `gcid-viral-seq` ($4.9K)
+  - 5008152: $1.5K/14d. Top: `gcid-malaria` ($762)
+  - Non-Terra dominates spend; Compute ($12.6K) and Storage ($5.1K) are top service categories
+  - `team=malaria` label not yet visible in export
 
-### Step 2: Label `gcid-malaria` with `team=malaria`
+### Quota issue discovered
+- Hit `QueryUsagePerDay` custom quota on `gcid-data-core` after many queries against the full SADA export (534 accounts, millions of rows)
+- This is also what caused Looker Studio "cannot connect to your data set" errors (not a filter/join issue)
+- **Must fix before Looker dashboard is usable** — every chart fires its own query, and filter changes re-query all charts
 
-```bash
-gcloud projects update gcid-malaria --update-labels team=malaria
-```
-
-Then query the billing export to verify the label appears retroactively on historical rows.
-
-### Step 3: Create summary view (no billing account restriction)
-
-Create `gcid-data-core.custom_sada_billing_views.billing_account_summary` — covers ALL billing accounts in the SADA export. Filter to specific accounts at query time.
-
-No storage cost for keeping the view unrestricted (it's a VIEW, not a table). Query-time filtering on `billing_account_id` is just as efficient.
-
-```sql
-CREATE OR REPLACE VIEW
-  `gcid-data-core.custom_sada_billing_views.billing_account_summary` AS
-SELECT
-  b.billing_account_id,
-  n.display_name AS billing_account_name,
-  DATE(b.usage_start_time) AS usage_date,
-  b.project.id AS project_id,
-  b.project.name AS project_name,
-  CASE
-    WHEN b.project.id LIKE 'terra-%' THEN 'Terra'
-    WHEN b.project.id IS NULL THEN 'Account-level'
-    ELSE 'Non-Terra'
-  END AS project_category,
-  (SELECT value FROM UNNEST(b.project.labels) WHERE key = 'workspacenamespace')
-    AS terra_billing_project,
-  (SELECT value FROM UNNEST(b.project.labels) WHERE key = 'workspacename')
-    AS terra_workspace_name,
-  (SELECT value FROM UNNEST(b.project.labels) WHERE key = 'team')
-    AS team,
-  b.service.description AS service_name,
-  CASE
-    WHEN b.service.description = 'Compute Engine' THEN 'Compute'
-    WHEN b.service.description = 'Cloud Storage' THEN 'Storage'
-    WHEN b.service.description = 'Vertex AI'
-         OR LOWER(b.service.description) LIKE '%claude%'
-         OR LOWER(b.service.description) LIKE '%opus%'
-         OR LOWER(b.service.description) LIKE '%sonnet%'
-         OR LOWER(b.service.description) LIKE '%haiku%'
-      THEN 'Vertex AI'
-    WHEN b.service.description = 'Networking' THEN 'Networking'
-    WHEN b.service.description = 'Support' THEN 'Support'
-    ELSE 'Other'
-  END AS service_category,
-  b.sku.description AS sku_description,
-  b.location.region AS region,
-  b.cost,
-  b.cost + IFNULL((SELECT SUM(c.amount) FROM UNNEST(b.credits) c), 0) AS net_cost,
-  b.usage.amount AS usage_amount,
-  b.usage.unit AS usage_unit
-FROM `broad-gcp-billing.gcp_billing_export_views.sada_billing_export_resource_v1_001AC2_2B914D_822931` b
-LEFT JOIN `gcid-data-core.custom_sada_billing_views.billing_account_names` n
-  ON b.billing_account_id = n.billing_account_id
-```
-
-### Step 4: Run exploratory queries and display results
-
-Using the view, run and display:
-
-- **a)** Daily cost by billing account (past 14 days, filtering to our 3 accounts)
-- **b)** Daily cost by project_category (Terra vs Non-Terra) per account
-- **c)** Daily cost by service_category (Compute vs Storage vs Vertex AI vs Other)
-- **d)** Terra billing project cost breakdown per account
-- **e)** Top non-Terra projects by cost, showing `team` label where set
-- **f)** Verify `team=malaria` label appears retroactively on `gcid-malaria` historical rows
-
-## Files to Create
+## Files Created
 
 | File | Description |
 |---|---|
-| `refresh-billing-account-names.sh` | Script to populate/refresh the BQ mapping table from `gcloud billing accounts list` |
+| `billing-reporting/refresh-billing-account-names.sh` | Refresh BQ mapping table from `gcloud billing accounts list` |
+| `billing-reporting/create-summary-view.sql` | SQL definition of the billing_account_summary view |
 
-## BQ Objects to Create
+## BQ Objects Created
 
 | Object | Type | Dataset |
 |---|---|---|
-| `billing_account_names` | TABLE | `gcid-data-core.custom_sada_billing_views` |
+| `billing_account_names` | TABLE (20 rows) | `gcid-data-core.custom_sada_billing_views` |
 | `billing_account_summary` | VIEW | `gcid-data-core.custom_sada_billing_views` |
 
-## Verification
+## TODO: Next Session
 
-1. Mapping table: `SELECT * FROM billing_account_names` shows human-readable names
-2. Label experiment: query `gcid-malaria` rows — `team` column shows `malaria` on all historical rows
-3. Summary view: `SELECT billing_account_name, usage_date, SUM(net_cost) ... GROUP BY 1, 2` shows daily costs with readable names
-4. Cross-check: per-account totals match direct queries against the SADA export
+### 1. Solve the query cost / quota problem (BLOCKING)
+
+The current view scans the entire SADA export on every query. Need to determine whether we can scope it cheaply or must materialize.
+
+**First: check if the SADA export is date-partitioned:**
+```sql
+SELECT column_name, is_partitioning_column, clustering_ordinal_position
+FROM `broad-gcp-billing.gcp_billing_export_views.INFORMATION_SCHEMA.COLUMNS`
+WHERE table_name = 'sada_billing_export_resource_v1_001AC2_2B914D_822931'
+```
+If that fails (the source may itself be a view), do a dry-run with and without a date filter to compare estimated bytes scanned.
+
+**Path A — Table is partitioned:** Add a rolling time window to the view (e.g., 90 days):
+```sql
+WHERE b.usage_start_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 90 DAY)
+```
+Update `create-summary-view.sql` and recreate the view. This is the simple/preferred path.
+
+**Path B — Table is NOT partitioned (or is a view itself):** Create a nightly materialized export. Write a scheduled query or script that:
+- Queries the SADA export with a date filter (e.g., rolling 90 days)
+- Writes results to a partitioned TABLE in `custom_sada_billing_views`
+- Looker Studio points at the materialized table instead of the view
+- Script goes in `billing-reporting/`
+
+### 2. Verify `team=malaria` label propagation
+Re-run query (f) to check if the billing export now shows `team=malaria` retroactively:
+```sql
+SELECT project_id, team, MIN(usage_date) AS earliest, MAX(usage_date) AS latest, COUNT(*) AS rows
+FROM `gcid-data-core.custom_sada_billing_views.billing_account_summary`
+WHERE project_id = 'gcid-malaria'
+GROUP BY 1, 2
+```
+
+### 3. Fix and finish Looker Studio dashboard
+- Confirm dashboard works after quota resets (and after fixing query cost in TODO #1)
+- If filtering by `billing_account_name` still breaks, try `billing_account_id` instead
+- Add charts per Step 5c/5d layout below
+- Add calculated fields per Step 5e
+- Consider adding more `team=` labels to non-Terra projects via Cloud Console (**IAM & Admin > Settings > Labels**)
 
 ## Step 5: Looker Studio Dashboard Setup
 
