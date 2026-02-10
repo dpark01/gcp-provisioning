@@ -3,6 +3,9 @@
 --
 -- This replaces the entire table contents each run. The table is date-partitioned
 -- for efficient querying, with 95-day partition expiration as a safety buffer.
+--
+-- NOTE: Uses INNER JOIN to only include billing accounts with mapped names.
+-- To add more accounts, update billing_account_names table and re-run.
 
 CREATE OR REPLACE TABLE `gcid-data-core.custom_sada_billing_views.billing_data`
 PARTITION BY usage_date
@@ -49,6 +52,6 @@ SELECT
   b.usage.amount AS usage_amount,
   b.usage.unit AS usage_unit
 FROM `broad-gcp-billing.gcp_billing_export_views.sada_billing_export_resource_v1_001AC2_2B914D_822931` b
-LEFT JOIN `gcid-data-core.custom_sada_billing_views.billing_account_names` n
+INNER JOIN `gcid-data-core.custom_sada_billing_views.billing_account_names` n
   ON b.billing_account_id = n.billing_account_id
 WHERE b.usage_start_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 90 DAY);
