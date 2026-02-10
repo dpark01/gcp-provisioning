@@ -33,11 +33,11 @@ We want generalized cost reporting for any GCP Billing Account at the Broad. Sta
 
 ### Step 2: Label `gcid-malaria` -- DONE (pending export refresh)
 - Applied `team=malaria` via Cloud Resource Manager REST API (confirmed on project)
-- Billing export still shows `team=NULL` as of 2026-02-09 — awaiting export refresh
+- Billing export still shows `team=NULL` as of 2026-02-10 — SADA export may take 24-48h to reflect label changes
 
-### Step 3: Summary view -- DONE (needs revision, see TODO #1)
-- Created `billing_account_summary` view (SQL in `billing-reporting/create-summary-view.sql`)
-- Covers ALL 534 billing accounts; no time scoping currently
+### Step 3: Summary view -- DONE (replaced with materialized approach)
+- Original `billing_account_summary` view caused quota issues (scanned ~98 GB per query)
+- **Replaced with materialized table approach** (see Step 5 below)
 
 ### Step 4: Exploratory queries -- DONE
 - All 6 queries (a-f) ran successfully. Key findings:
@@ -47,75 +47,90 @@ We want generalized cost reporting for any GCP Billing Account at the Broad. Sta
   - Non-Terra dominates spend; Compute ($12.6K) and Storage ($5.1K) are top service categories
   - `team=malaria` label not yet visible in export
 
-### Quota issue discovered
+### Quota issue discovered and RESOLVED
 - Hit `QueryUsagePerDay` custom quota on `gcid-data-core` after many queries against the full SADA export (534 accounts, millions of rows)
 - This is also what caused Looker Studio "cannot connect to your data set" errors (not a filter/join issue)
-- **Must fix before Looker dashboard is usable** — every chart fires its own query, and filter changes re-query all charts
+- **RESOLVED**: Created materialized, partitioned table (see Step 5)
+
+## Completed (2026-02-10)
+
+### Step 5: Materialized billing table -- DONE
+- **Problem**: SADA export is a VIEW (not partitioned), so WHERE clause on date actually DOUBLES bytes scanned (~198 GB vs 98 GB)
+- **Solution**: Created materialized, date-partitioned table with 90-day rolling window
+
+**Created:**
+- `billing-reporting/create-materialized-billing-table.sql` — DDL for partitioned table
+- `billing-reporting/refresh-materialized-billing.sh` — Full refresh script (DELETE + INSERT)
+- `billing-reporting/create-summary-view-v2.sql` — View over materialized table
+
+**BQ objects:**
+- `billing_data` — Partitioned table (1.1B rows, 412 accounts, 137K projects, $4.2M total)
+- `billing_account_summary_v2` — View for Looker Studio
+- Deleted old `billing_account_summary` view (replaced by v2)
+
+**Verification:**
+- 14-day query: ~1 GB scanned (vs 98 GB before) — **98% reduction**
+- Full table: ~1 GB scanned (vs 98 GB) — partitioning works
+- Looker Studio should now be responsive
+
+**Scheduling:** Run `refresh-materialized-billing.sh` daily at 6 AM PT (captures overnight exports)
 
 ## Files Created
 
 | File | Description |
 |---|---|
 | `billing-reporting/refresh-billing-account-names.sh` | Refresh BQ mapping table from `gcloud billing accounts list` |
-| `billing-reporting/create-summary-view.sql` | SQL definition of the billing_account_summary view |
+| `billing-reporting/create-summary-view.sql` | Original view definition (deprecated) |
+| `billing-reporting/create-materialized-billing-table.sql` | DDL for partitioned billing_data table |
+| `billing-reporting/refresh-materialized-billing.sh` | Script to refresh 90-day rolling window |
+| `billing-reporting/create-summary-view-v2.sql` | View over materialized table (for Looker) |
+| `billing-reporting/scheduled-billing-refresh.sql` | BQ Scheduled Query (runs daily 0900 UTC) |
 
 ## BQ Objects Created
 
-| Object | Type | Dataset |
+| Object | Type | Notes |
 |---|---|---|
-| `billing_account_names` | TABLE (20 rows) | `gcid-data-core.custom_sada_billing_views` |
-| `billing_account_summary` | VIEW | `gcid-data-core.custom_sada_billing_views` |
+| `billing_account_names` | TABLE (20 rows) | Display names from `gcloud billing accounts list` |
+| `billing_data` | TABLE (partitioned) | 90-day rolling window, 1.1B rows, refreshed daily |
+| `billing_account_summary_v2` | VIEW | Points to billing_data, use for Looker Studio |
+
+Dataset: `gcid-data-core.custom_sada_billing_views`
 
 ## TODO: Next Session
 
-### 1. Solve the query cost / quota problem (BLOCKING)
+### 1. Solve the query cost / quota problem -- DONE
+Materialized table created. See "Completed (2026-02-10)" above.
 
-The current view scans the entire SADA export on every query. Need to determine whether we can scope it cheaply or must materialize.
-
-**First: check if the SADA export is date-partitioned:**
+### 2. Verify `team=malaria` label propagation -- PENDING
+Label applied on 2026-02-09, still showing NULL as of 2026-02-10. Check again after 24-48h:
 ```sql
-SELECT column_name, is_partitioning_column, clustering_ordinal_position
-FROM `broad-gcp-billing.gcp_billing_export_views.INFORMATION_SCHEMA.COLUMNS`
-WHERE table_name = 'sada_billing_export_resource_v1_001AC2_2B914D_822931'
-```
-If that fails (the source may itself be a view), do a dry-run with and without a date filter to compare estimated bytes scanned.
-
-**Path A — Table is partitioned:** Add a rolling time window to the view (e.g., 90 days):
-```sql
-WHERE b.usage_start_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 90 DAY)
-```
-Update `create-summary-view.sql` and recreate the view. This is the simple/preferred path.
-
-**Path B — Table is NOT partitioned (or is a view itself):** Create a nightly materialized export. Write a scheduled query or script that:
-- Queries the SADA export with a date filter (e.g., rolling 90 days)
-- Writes results to a partitioned TABLE in `custom_sada_billing_views`
-- Looker Studio points at the materialized table instead of the view
-- Script goes in `billing-reporting/`
-
-### 2. Verify `team=malaria` label propagation
-Re-run query (f) to check if the billing export now shows `team=malaria` retroactively:
-```sql
-SELECT project_id, team, MIN(usage_date) AS earliest, MAX(usage_date) AS latest, COUNT(*) AS rows
-FROM `gcid-data-core.custom_sada_billing_views.billing_account_summary`
+SELECT project_id, team, MIN(usage_date) AS earliest, MAX(usage_date) AS latest, COUNT(*) AS row_count
+FROM `gcid-data-core.custom_sada_billing_views.billing_data`
 WHERE project_id = 'gcid-malaria'
 GROUP BY 1, 2
 ```
 
-### 3. Fix and finish Looker Studio dashboard
-- Confirm dashboard works after quota resets (and after fixing query cost in TODO #1)
-- If filtering by `billing_account_name` still breaks, try `billing_account_id` instead
-- Add charts per Step 5c/5d layout below
-- Add calculated fields per Step 5e
+### 3. Set up daily refresh schedule -- DONE
+Created BQ Scheduled Query "Daily Billing Data Refresh" running at 0900 UTC daily.
+- SQL: `billing-reporting/scheduled-billing-refresh.sql`
+- Uses `CREATE OR REPLACE TABLE` (single-statement, no shell script needed)
+- View in Console: BigQuery > Scheduled Queries > "Daily Billing Data Refresh"
+
+### 4. Complete Looker Studio dashboard
+- Point data source at `billing_account_summary_v2` (or directly at `billing_data`)
+- Dashboard should now be responsive (1 GB vs 98 GB per query)
+- Add charts per layout in sections below
+- Add calculated fields per Step 6e
 - Consider adding more `team=` labels to non-Terra projects via Cloud Console (**IAM & Admin > Settings > Labels**)
 
-## Step 5: Looker Studio Dashboard Setup
+## Step 6: Looker Studio Dashboard Setup
 
-### 5a. Create Data Source
+### 6a. Create Data Source
 
 1. Go to [Looker Studio](https://lookerstudio.google.com)
 2. Click **Create** > **Data source**
 3. Select **BigQuery** connector
-4. Navigate to: `gcid-data-core` > `custom_sada_billing_views` > `billing_account_summary`
+4. Navigate to: `gcid-data-core` > `custom_sada_billing_views` > `billing_data` (or `billing_account_summary_v2`)
 5. Click **Connect**
 6. Review field types — ensure:
    - `usage_date` is set to **Date**
@@ -123,7 +138,7 @@ GROUP BY 1, 2
    - `billing_account_name`, `project_category`, `service_category`, `team` are **Text**
 7. Click **Create Report** (or **Add to Report** if adding to an existing one)
 
-### 5b. Add Controls (Filters)
+### 6b. Add Controls (Filters)
 
 At the top of the report, add these filter controls:
 
@@ -134,7 +149,7 @@ At the top of the report, add these filter controls:
 | Project category | Drop-down list | `project_category` | All |
 | Service category | Drop-down list | `service_category` | All |
 
-### 5c. Recommended Dashboard Layout
+### 6c. Recommended Dashboard Layout
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
@@ -161,7 +176,7 @@ At the top of the report, add these filter controls:
 └──────────────────────────────────┴───────────────────────────────────────┘
 ```
 
-### 5d. Chart Configuration
+### 6d. Chart Configuration
 
 | Chart | Type | Dimension(s) | Metric | Notes |
 |---|---|---|---|---|
@@ -173,7 +188,7 @@ At the top of the report, add these filter controls:
 | Top Projects | Table | project_id, team, service_category | SUM(net_cost) | Sort descending, show top 20 |
 | Terra Billing Projects | Table | terra_billing_project, service_category | SUM(net_cost) | Filter: project_category = "Terra" |
 
-### 5e. Calculated Fields to Add in Looker
+### 6e. Calculated Fields to Add in Looker
 
 | Field Name | Formula | Purpose |
 |---|---|---|
@@ -181,7 +196,7 @@ At the top of the report, add these filter controls:
 | Daily Average Cost | `SUM(net_cost) / Date Range Days` | Average cost per day |
 | Project Display | `CASE WHEN project_category = "Terra" THEN terra_workspace_name ELSE project_id END` | Human-readable project name |
 
-### 5f. Optional: Daily Email Alert
+### 6f. Optional: Daily Email Alert
 
 Looker Studio supports scheduled email delivery:
 1. Click **Share** > **Schedule email delivery**
