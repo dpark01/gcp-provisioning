@@ -8,7 +8,7 @@ Two usage patterns for tracking Claude Code (Vertex AI) costs:
 
 2. **Shared projects**: Multiple users share a project (currently `gcid-data-core`, extensible to future projects). Audit logs provide per-user attribution via proportional cost splitting.
 
-**Goal**: Create a unified Looker dashboard showing per-user Claude Code costs across both patterns, with per-model granularity, supporting multiple billing accounts and funding sources.
+**Goal**: Create a unified Looker dashboard showing per-user Claude Code costs across both patterns, with per-model granularity, supporting multiple billing accounts.
 
 ## Architecture
 
@@ -71,7 +71,7 @@ Two usage patterns for tracking Claude Code (Vertex AI) costs:
                              ▼
                     Looker Studio Dashboard
                     Filters: user, project, model,
-                    billing account, funding source, date
+                    billing account, date
 ```
 
 ## Existing Infrastructure
@@ -100,25 +100,37 @@ Both audit logs and billing SKUs are normalized to a common `model_family` key:
 
 **Audit log side** (from `protopayload_auditlog.resourceName`):
 ```
-claude-3-5-sonnet%  → sonnet-3.5       claude-sonnet-5%  → sonnet-5
-claude-sonnet-4%    → sonnet-4         claude-opus-5%    → opus-5
-claude-3-5-haiku%   → haiku-3.5        claude-haiku-5%   → haiku-5
-claude-haiku-4%     → haiku-4
-claude-3-opus%      → opus-3           ELSE → raw model_name (graceful fallback)
+claude-3-5-sonnet%  → sonnet-3.5
+claude-3-5-haiku%   → haiku-3.5
+claude-3-opus%      → opus-3
+claude-sonnet-4-5%  → sonnet-4.5      (before sonnet-4 — first match wins)
+claude-sonnet-4%    → sonnet-4
+claude-opus-4-6%    → opus-4.6        (before opus-4 — first match wins)
+claude-opus-4-5%    → opus-4.5
+claude-opus-4-1%    → opus-4.1
 claude-opus-4%      → opus-4
+claude-haiku-4-5%   → haiku-4.5       (before haiku-4 — first match wins)
+claude-haiku-4%     → haiku-4
+ELSE                → raw model_name (graceful fallback)
 ```
 
 **Billing SKU side** (from `sku_description`):
 ```
-%3.5 sonnet%  → sonnet-3.5            %sonnet 5%  → sonnet-5
-%sonnet 4%    → sonnet-4              %opus 5%    → opus-5
-%3.5 haiku%   → haiku-3.5             %haiku 5%   → haiku-5
-%haiku 4%     → haiku-4
-%opus 3%      → opus-3                ELSE → LOWER(sku_description) (graceful fallback)
+%3.5 sonnet%  → sonnet-3.5
+%3.5 haiku%   → haiku-3.5
+%opus 3%      → opus-3
+%sonnet 4.5%  → sonnet-4.5            (before sonnet 4 — first match wins)
+%sonnet 4%    → sonnet-4
+%opus 4.6%    → opus-4.6              (before opus 4 — first match wins)
+%opus 4.5%    → opus-4.5              (Google uses both dots and spaces:
+%opus 4.1%    → opus-4.1               "Opus 4.1" vs "Opus 4 5" vs "Opus 4 6")
 %opus 4%      → opus-4
+%haiku 4.5%   → haiku-4.5             (before haiku 4 — first match wins)
+%haiku 4%     → haiku-4
+ELSE          → LOWER(sku_description) (graceful fallback)
 ```
 
-**Maintenance**: New model versions within a family (e.g., `claude-sonnet-4-20260601`) need zero updates — the wildcards catch them. A new model family (e.g., Sonnet 6) requires adding one WHEN clause to each of two SQL files. Until updated, unrecognized models fall through to the ELSE with the raw name visible in the dashboard.
+**Maintenance**: New snapshots within a sub-version (e.g., `claude-sonnet-4-5-20260601`) need zero updates — the wildcards catch them. A new sub-version (e.g., Opus 4.7) requires adding one WHEN clause to each of two SQL files, placed *before* the base version pattern. Until updated, unrecognized models fall through to the ELSE with the raw name visible in the dashboard.
 
 **ELSE behavior for shared projects**: Raw names from the two sides won't match each other, so costs go to `user_email = 'unattributed'` with the raw SKU visible. This prevents false cross-attribution between different unknown models.
 
@@ -137,24 +149,26 @@ LEFT JOIN from billing to audit data ensures dollar conservation. Costs without 
 **File: `vertex-ai/create-project-mapping.sql`**
 
 ```sql
-CREATE TABLE IF NOT EXISTS `gcid-data-core.custom_sada_billing_views.claude_code_projects` (
+DROP TABLE IF EXISTS `gcid-data-core.custom_sada_billing_views.claude_code_projects`;
+
+CREATE TABLE `gcid-data-core.custom_sada_billing_views.claude_code_projects` (
   project_id STRING NOT NULL,
   project_type STRING NOT NULL,     -- 'single_user' or 'shared'
-  user_email STRING,                -- For single_user projects; NULL for shared
-  billing_account_id STRING,
-  funding_source STRING,
-  enabled_date DATE
+  user_email STRING                 -- For single_user projects; NULL for shared
 );
 
 INSERT INTO `gcid-data-core.custom_sada_billing_views.claude_code_projects`
-  (project_id, project_type, user_email, billing_account_id, funding_source, enabled_date)
+  (project_id, project_type, user_email)
 VALUES
-  ('coding-dpark',    'single_user', 'dpark@broadinstitute.org',    '011F41-0941F7-749F4B', 'GCID 5008388', NULL),
-  ('coding-carze',    'single_user', 'carze@broadinstitute.org',    '011F41-0941F7-749F4B', 'GCID 5008388', NULL),
-  ('coding-lluebber', 'single_user', 'lluebber@broadinstitute.org', '011F41-0941F7-749F4B', 'GCID 5008388', NULL),
-  ('coding-pvarilly', 'single_user', 'pvarilly@broadinstitute.org', '0193CA-41033B-3FF267', 'GCID 5008157', NULL),
-  ('gcid-data-core',  'shared',      NULL,                          '00864F-515C74-8B1641', 'GCID 5008152', NULL);
+  ('coding-dpark',    'single_user', 'dpark@broadinstitute.org'),
+  ('coding-carze',    'single_user', 'carze@broadinstitute.org'),
+  ('coding-lluebber', 'single_user', 'lluebber@broadinstitute.org'),
+  ('coding-pvarilly', 'single_user', 'pvarilly@broadinstitute.org'),
+  ('gcid-data-core',  'shared',      NULL),
+  ('sabeti-ai',       'shared',      NULL);
 ```
+
+Billing account info (`billing_account_id`, `billing_account_name`) is derived from `billing_data` at query time, so the mapping table only stores what can't be looked up elsewhere.
 
 ### Step 2: Audit log views (for shared projects)
 
@@ -178,7 +192,7 @@ Main view `claude_code_user_costs` with CTEs:
 - **`shared_user_costs`** — LEFT JOIN billing to audit data on `(project, date, model_family)`. Proportional: `cost = net_cost * SAFE_DIVIDE(user_requests, total_requests)`. Unmatched → `'unattributed'`
 - **UNION ALL** both branches
 
-Output columns: `usage_date, user_email, project_id, funding_source, billing_account_id, sku_description, model_family, cost, usage_amount, usage_unit, attribution_method`
+Output columns: `usage_date, user_email, project_id, billing_account_id, billing_account_name, sku_description, model_family, cost, usage_amount, usage_unit, attribution_method`
 
 ### Step 4: Audit sink setup script
 
@@ -195,17 +209,28 @@ Script taking `<project-id>` as argument:
 
 Data source: `claude_code_user_costs`
 
-**Filters:** Date range, User, Project, Model, Funding Source, Billing Account
+**Calculated fields** (add to the BigQuery data source in Looker Studio):
+
+| Field | Formula |
+|-------|---------|
+| `cost_object` | `IFNULL(REGEXP_EXTRACT(billing_account_name, "- (\\d+)"), billing_account_name)` |
+| `user_name` | `IFNULL(REGEXP_EXTRACT(user_email, "^([^@]+)"), user_email)` |
+
+`cost_object` extracts the numeric cost object ID from `billing_account_name` (e.g., `"Broad Institute - 5008388 (SADA)"` → `"5008388"`). Works whether or not the `(SADA)` suffix is present.
+
+`user_name` extracts the local part of the email address (e.g., `"dpark@broadinstitute.org"` → `"dpark"`).
+
+**Filters:** Date range, User, Project, Model, Billing Account
 
 **Charts:**
 | Chart | Type | Dimension | Metric |
 |-------|------|-----------|--------|
 | Total Cost | Scorecard | - | SUM(cost) |
-| Cost by User | Bar chart | user_email | SUM(cost) |
-| Daily Trend | Stacked bar | usage_date | SUM(cost), breakdown by user_email |
+| Cost by User | Bar chart | user_name | SUM(cost) |
+| Daily Trend | Stacked bar | usage_date | SUM(cost), breakdown by user_name |
 | Cost by Model | Bar chart | model_family | SUM(cost) |
-| Cost by Funding Source | Pie chart | funding_source | SUM(cost) |
-| User Details | Table | user_email, model_family, project_id, sku_description | SUM(cost) |
+| Cost by Billing Account | Pie chart | cost_object | SUM(cost) |
+| User Details | Table | user_name, model_family, project_id, sku_description | SUM(cost) |
 
 ## Execution Order
 
@@ -223,8 +248,8 @@ Each SQL file: `bq query --nouse_legacy_sql --project_id=gcid-data-core < vertex
 One INSERT, no audit sink needed:
 ```sql
 INSERT INTO `gcid-data-core.custom_sada_billing_views.claude_code_projects`
-  (project_id, project_type, user_email, billing_account_id, funding_source, enabled_date)
-VALUES ('coding-newuser', 'single_user', 'newuser@broadinstitute.org', 'BILLING_ACCT_ID', 'Source Name', CURRENT_DATE());
+  (project_id, project_type, user_email)
+VALUES ('coding-newuser', 'single_user', 'newuser@broadinstitute.org');
 ```
 
 ### New shared project
@@ -234,8 +259,8 @@ Two steps:
 2. Insert mapping row:
 ```sql
 INSERT INTO `gcid-data-core.custom_sada_billing_views.claude_code_projects`
-  (project_id, project_type, user_email, billing_account_id, funding_source, enabled_date)
-VALUES ('new-shared-project', 'shared', NULL, 'BILLING_ACCT_ID', 'Source Name', CURRENT_DATE());
+  (project_id, project_type, user_email)
+VALUES ('new-shared-project', 'shared', NULL);
 ```
 
 No view changes needed — views handle multiple projects via JOINs. Billing data appears automatically via SADA export. Audit logs route via the sink to the central wildcard table.
@@ -277,7 +302,7 @@ FULL OUTER JOIN raw r USING (project_id, usage_date);
 **3. Per-user cost summary:**
 ```sql
 SELECT
-  user_email, model_family, funding_source, attribution_method,
+  user_email, model_family, billing_account_name, attribution_method,
   ROUND(SUM(cost), 2) AS total_cost,
   COUNT(DISTINCT usage_date) AS active_days
 FROM `gcid-data-core.custom_sada_billing_views.claude_code_user_costs`

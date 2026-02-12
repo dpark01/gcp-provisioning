@@ -26,23 +26,32 @@ WITH billing_with_model AS (
   SELECT
     b.*,
     CASE
+      -- 3.x models
       WHEN LOWER(b.sku_description) LIKE '%3.5 sonnet%'
         OR LOWER(b.sku_description) LIKE '%3-5 sonnet%'
-        OR LOWER(b.sku_description) LIKE '%3_5 sonnet%'    THEN 'sonnet-3.5'
-      WHEN LOWER(b.sku_description) LIKE '%sonnet 4%'
-        OR LOWER(b.sku_description) LIKE '%sonnet-4%'       THEN 'sonnet-4'
+        OR LOWER(b.sku_description) LIKE '%3_5 sonnet%'      THEN 'sonnet-3.5'
       WHEN LOWER(b.sku_description) LIKE '%3.5 haiku%'
         OR LOWER(b.sku_description) LIKE '%3-5 haiku%'
-        OR LOWER(b.sku_description) LIKE '%3_5 haiku%'      THEN 'haiku-3.5'
-      WHEN LOWER(b.sku_description) LIKE '%haiku 4%'
-        OR LOWER(b.sku_description) LIKE '%haiku-4%'         THEN 'haiku-4'
+        OR LOWER(b.sku_description) LIKE '%3_5 haiku%'        THEN 'haiku-3.5'
       WHEN LOWER(b.sku_description) LIKE '%opus 3%'
-        OR LOWER(b.sku_description) LIKE '%3 opus%'          THEN 'opus-3'
-      WHEN LOWER(b.sku_description) LIKE '%opus 4%'          THEN 'opus-4'
-      -- Preemptive future models
-      WHEN LOWER(b.sku_description) LIKE '%sonnet 5%'        THEN 'sonnet-5'
-      WHEN LOWER(b.sku_description) LIKE '%opus 5%'          THEN 'opus-5'
-      WHEN LOWER(b.sku_description) LIKE '%haiku 5%'         THEN 'haiku-5'
+        OR LOWER(b.sku_description) LIKE '%3 opus%'            THEN 'opus-3'
+      -- 4.x models: sub-versions BEFORE base version (first match wins)
+      -- Google uses both dots (4.1, 4.5) and spaces (4 5, 4 6) inconsistently
+      WHEN LOWER(b.sku_description) LIKE '%sonnet 4.5%'
+        OR LOWER(b.sku_description) LIKE '%sonnet 4 5%'       THEN 'sonnet-4.5'
+      WHEN LOWER(b.sku_description) LIKE '%sonnet 4%'
+        OR LOWER(b.sku_description) LIKE '%sonnet-4%'          THEN 'sonnet-4'
+      WHEN LOWER(b.sku_description) LIKE '%opus 4.6%'
+        OR LOWER(b.sku_description) LIKE '%opus 4 6%'          THEN 'opus-4.6'
+      WHEN LOWER(b.sku_description) LIKE '%opus 4.5%'
+        OR LOWER(b.sku_description) LIKE '%opus 4 5%'          THEN 'opus-4.5'
+      WHEN LOWER(b.sku_description) LIKE '%opus 4.1%'
+        OR LOWER(b.sku_description) LIKE '%opus 4 1%'          THEN 'opus-4.1'
+      WHEN LOWER(b.sku_description) LIKE '%opus 4%'            THEN 'opus-4'
+      WHEN LOWER(b.sku_description) LIKE '%haiku 4.5%'
+        OR LOWER(b.sku_description) LIKE '%haiku 4 5%'         THEN 'haiku-4.5'
+      WHEN LOWER(b.sku_description) LIKE '%haiku 4%'
+        OR LOWER(b.sku_description) LIKE '%haiku-4%'            THEN 'haiku-4'
       -- Graceful fallback: raw SKU description instead of generic 'other'
       ELSE LOWER(b.sku_description)
     END AS model_family
@@ -58,8 +67,8 @@ single_user_costs AS (
     b.usage_date,
     p.user_email,
     b.project_id,
-    p.funding_source,
     b.billing_account_id,
+    b.billing_account_name,
     b.sku_description,
     b.model_family,
     b.net_cost AS cost,
@@ -94,8 +103,8 @@ shared_user_costs AS (
     b.usage_date,
     COALESCE(u.user_email, 'unattributed') AS user_email,
     b.project_id,
-    p.funding_source,
     b.billing_account_id,
+    b.billing_account_name,
     b.sku_description,
     b.model_family,
     -- When audit logs exist: split proportionally

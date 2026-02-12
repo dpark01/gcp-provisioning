@@ -39,19 +39,22 @@ SELECT
   -- Billing SKUs group by model family (e.g., "Claude 3.5 Sonnet"), not by snapshot.
   -- Update this CASE when Anthropic releases a new model family.
   CASE
+    -- 3.x models
     WHEN model_name LIKE 'claude-3-5-sonnet%'
-      OR model_name LIKE 'claude-3.5-sonnet%'   THEN 'sonnet-3.5'
-    WHEN model_name LIKE 'claude-sonnet-4%'      THEN 'sonnet-4'
+      OR model_name LIKE 'claude-3.5-sonnet%'     THEN 'sonnet-3.5'
     WHEN model_name LIKE 'claude-3-5-haiku%'
-      OR model_name LIKE 'claude-3.5-haiku%'     THEN 'haiku-3.5'
-    WHEN model_name LIKE 'claude-haiku-4%'       THEN 'haiku-4'
+      OR model_name LIKE 'claude-3.5-haiku%'       THEN 'haiku-3.5'
     WHEN model_name LIKE 'claude-3-opus%'
-      OR model_name LIKE 'claude-3.0-opus%'      THEN 'opus-3'
-    WHEN model_name LIKE 'claude-opus-4%'        THEN 'opus-4'
-    -- Preemptive future models
-    WHEN model_name LIKE 'claude-sonnet-5%'      THEN 'sonnet-5'
-    WHEN model_name LIKE 'claude-opus-5%'        THEN 'opus-5'
-    WHEN model_name LIKE 'claude-haiku-5%'       THEN 'haiku-5'
+      OR model_name LIKE 'claude-3.0-opus%'        THEN 'opus-3'
+    -- 4.x models: sub-versions BEFORE base version (first match wins)
+    WHEN model_name LIKE 'claude-sonnet-4-5%'      THEN 'sonnet-4.5'
+    WHEN model_name LIKE 'claude-sonnet-4%'        THEN 'sonnet-4'
+    WHEN model_name LIKE 'claude-opus-4-6%'        THEN 'opus-4.6'
+    WHEN model_name LIKE 'claude-opus-4-5%'        THEN 'opus-4.5'
+    WHEN model_name LIKE 'claude-opus-4-1%'        THEN 'opus-4.1'
+    WHEN model_name LIKE 'claude-opus-4%'          THEN 'opus-4'
+    WHEN model_name LIKE 'claude-haiku-4-5%'       THEN 'haiku-4.5'
+    WHEN model_name LIKE 'claude-haiku-4%'         THEN 'haiku-4'
     -- Graceful fallback: raw model name instead of generic 'other'
     ELSE COALESCE(model_name, 'unknown')
   END AS model_family,
