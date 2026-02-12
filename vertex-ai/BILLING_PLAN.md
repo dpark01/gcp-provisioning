@@ -2,173 +2,200 @@
 
 ## Context
 
-You have two usage patterns for tracking Claude Code (Vertex AI) costs:
+Two usage patterns for tracking Claude Code (Vertex AI) costs:
 
-1. **Original 4 users**: Each has a dedicated project (`coding-dpark`, `coding-carze`, `coding-lluebber`, `coding-pvarilly`). User = project, so billing data directly maps to users.
+1. **Single-user projects**: Each user has a dedicated project (`coding-dpark`, `coding-carze`, `coding-lluebber`, `coding-pvarilly`). User = project, so billing data directly maps to users. No audit logs needed.
 
-2. **Newer shared project**: Multiple users share `gcid-data-core` with audit log tracking for per-user attribution (already configured in `billing_export` dataset).
+2. **Shared projects**: Multiple users share a project (currently `gcid-data-core`, extensible to future projects). Audit logs provide per-user attribution via proportional cost splitting.
 
-**Goal**: Create a unified Looker dashboard that shows per-user Claude Code costs across both patterns, supporting multiple billing accounts for future scalability.
+**Goal**: Create a unified Looker dashboard showing per-user Claude Code costs across both patterns, with per-model granularity, supporting multiple billing accounts and funding sources.
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    DATA SOURCES                                  │
+├──────────────────────────┬──────────────────────────────────────┤
+│  SADA Billing Export     │  Audit Logs (per shared project)     │
+│  (all 534 billing accts) │  (only needed for shared projects)   │
+│                          │                                      │
+│  sku_description has     │  Has user_email + model_name         │
+│  per-model detail        │  per API call                        │
+│                          │                                      │
+│                          │  gcid-data-core ──sink──┐            │
+│                          │  future-proj-X  ──sink──┤            │
+│                          │  future-proj-Y  ──sink──┘            │
+└────────────┬─────────────┴──────────────┬───────────────────────┘
+             │                            │
+             ▼                            ▼
+┌────────────────────────┐  ┌─────────────────────────────────────┐
+│ billing_data           │  │ billing_export.cloudaudit_*          │
+│ (materialized, daily)  │  │ (single central dataset, wildcard)  │
+│ 90-day rolling window  │  │ resource.labels.project_id          │
+│ partitioned by date    │  │ distinguishes source project        │
+└────────────┬───────────┘  └──────────────┬──────────────────────┘
+             │                             │
+             │                             ▼
+             │               ┌──────────────────────────────┐
+             │               │ claude_code_audit_logs        │
+             │               │   (model_name + model_family) │
+             │               │ claude_code_daily_usage        │
+             │               │   (request counts per          │
+             │               │    user/day/model_family)      │
+             │               └──────────────┬───────────────┘
+             │                              │
+             ▼                              ▼
+        ┌────────────────────────────────────────────┐
+        │        claude_code_projects                 │
+        │        (mapping table)                      │
+        │  ┌──────────────┬─────────────────────┐    │
+        │  │ single_user  │ shared              │    │
+        │  │ coding-dpark │ gcid-data-core      │    │
+        │  │ coding-carze │ (future-proj-X)     │    │
+        │  │ ...          │ (future-proj-Y)     │    │
+        │  └──────────────┴─────────────────────┘    │
+        └────────────────────┬───────────────────────┘
+                             │
+                             ▼
+        ┌────────────────────────────────────────────┐
+        │      claude_code_user_costs                 │
+        │                                             │
+        │  single_user → direct attribution           │
+        │    (user = project owner, full cost)         │
+        │                                             │
+        │  shared → proportional attribution          │
+        │    (cost × user_requests / total_requests)  │
+        │    joined at (project, date, model_family)  │
+        └────────────────────┬───────────────────────┘
+                             │
+                             ▼
+                    Looker Studio Dashboard
+                    Filters: user, project, model,
+                    billing account, funding source, date
+```
 
 ## Existing Infrastructure
 
 **Already in place:**
-- SADA billing export → `custom_sada_billing_views.billing_data` (all 534 billing accounts, includes Vertex AI/Claude costs)
-- Audit logs → `billing_export.cloudaudit_googleapis_com_data_access_*` (gcid-data-core only)
-- Views → `billing_export.claude_usage_detailed`, `claude_cost_per_user`
+- SADA billing export → `custom_sada_billing_views.billing_data` (materialized, partitioned, 90-day rolling window, refreshed daily at 0900 UTC)
+- Audit logs → `billing_export.cloudaudit_googleapis_com_data_access_*` (gcid-data-core only, currently)
+- Older views → `billing_export.claude_usage_detailed`, `claude_cost_per_user` (will be superseded)
 
-**Current limitation:**
-The existing `claude_cost_per_user` view only reads from one billing export table (`gcp_billing_export_resource_v1_00864F_515C74_8B1641`). The consolidated solution will use the SADA `billing_data` table which already has all billing accounts.
+## Key Design Decisions
 
-## What We'll Build
+### Per-model attribution for shared projects
 
-1. **Project mapping table** — maps projects to users and identifies single-user vs shared
-2. **Unified cost view** — combines single-user (direct) and shared (proportional) attribution
-3. **Looker dashboard** — consolidated view across all users and funding sources
+Billing data and user identity live in different sources:
 
-## Implementation Plan
+| Source | Has cost/model? | Has user? |
+|--------|----------------|-----------|
+| `billing_data` (SADA) | Yes — per-SKU costs | No — project-level only |
+| Audit logs | Model name per request | Yes — `principalEmail` |
 
-### Step 1: Create Claude Code project mapping table
+We join at **(project, date, model_family)** so users of expensive models are attributed correctly. A `model_family` key (e.g., `sonnet-4`, `opus-4`) normalizes model names from both sources via CASE expressions.
 
-Create a mapping table in `gcid-data-core.custom_sada_billing_views`:
+### Model family normalization
+
+Both audit logs and billing SKUs are normalized to a common `model_family` key:
+
+**Audit log side** (from `protopayload_auditlog.resourceName`):
+```
+claude-3-5-sonnet%  → sonnet-3.5       claude-sonnet-5%  → sonnet-5
+claude-sonnet-4%    → sonnet-4         claude-opus-5%    → opus-5
+claude-3-5-haiku%   → haiku-3.5        claude-haiku-5%   → haiku-5
+claude-haiku-4%     → haiku-4
+claude-3-opus%      → opus-3           ELSE → raw model_name (graceful fallback)
+claude-opus-4%      → opus-4
+```
+
+**Billing SKU side** (from `sku_description`):
+```
+%3.5 sonnet%  → sonnet-3.5            %sonnet 5%  → sonnet-5
+%sonnet 4%    → sonnet-4              %opus 5%    → opus-5
+%3.5 haiku%   → haiku-3.5             %haiku 5%   → haiku-5
+%haiku 4%     → haiku-4
+%opus 3%      → opus-3                ELSE → LOWER(sku_description) (graceful fallback)
+%opus 4%      → opus-4
+```
+
+**Maintenance**: New model versions within a family (e.g., `claude-sonnet-4-20260601`) need zero updates — the wildcards catch them. A new model family (e.g., Sonnet 6) requires adding one WHEN clause to each of two SQL files. Until updated, unrecognized models fall through to the ELSE with the raw name visible in the dashboard.
+
+**ELSE behavior for shared projects**: Raw names from the two sides won't match each other, so costs go to `user_email = 'unattributed'` with the raw SKU visible. This prevents false cross-attribution between different unknown models.
+
+### Audit log sinks — no user permissions needed
+
+Log sinks use GCP-managed service accounts. Users in shared projects need zero permissions on gcid-data-core. Only the admin who runs the setup script needs access.
+
+### Unattributed costs
+
+LEFT JOIN from billing to audit data ensures dollar conservation. Costs without matching audit logs go to `user_email = 'unattributed'` so nothing silently disappears.
+
+## Implementation
+
+### Step 1: Project mapping table
 
 **File: `vertex-ai/create-project-mapping.sql`**
 
 ```sql
--- claude_code_projects: Maps projects to users and funding sources
 CREATE TABLE IF NOT EXISTS `gcid-data-core.custom_sada_billing_views.claude_code_projects` (
-  project_id STRING,           -- GCP project ID
-  project_type STRING,         -- 'single_user' or 'shared'
-  user_email STRING,           -- For single_user projects (NULL for shared)
-  billing_account_id STRING,   -- For grouping by funding source
-  funding_source STRING,       -- Human-readable funding source name
-  enabled_date DATE            -- When user started using Claude Code
+  project_id STRING NOT NULL,
+  project_type STRING NOT NULL,     -- 'single_user' or 'shared'
+  user_email STRING,                -- For single_user projects; NULL for shared
+  billing_account_id STRING,
+  funding_source STRING,
+  enabled_date DATE
 );
 
--- Populate with current projects (actual billing account IDs from SADA data)
-INSERT INTO `gcid-data-core.custom_sada_billing_views.claude_code_projects` VALUES
-  ('coding-dpark', 'single_user', 'dpark@broadinstitute.org', '011F41-0941F7-749F4B', 'GCID 5008388', NULL),
-  ('coding-carze', 'single_user', 'carze@broadinstitute.org', '011F41-0941F7-749F4B', 'GCID 5008388', NULL),
+INSERT INTO `gcid-data-core.custom_sada_billing_views.claude_code_projects`
+  (project_id, project_type, user_email, billing_account_id, funding_source, enabled_date)
+VALUES
+  ('coding-dpark',    'single_user', 'dpark@broadinstitute.org',    '011F41-0941F7-749F4B', 'GCID 5008388', NULL),
+  ('coding-carze',    'single_user', 'carze@broadinstitute.org',    '011F41-0941F7-749F4B', 'GCID 5008388', NULL),
   ('coding-lluebber', 'single_user', 'lluebber@broadinstitute.org', '011F41-0941F7-749F4B', 'GCID 5008388', NULL),
   ('coding-pvarilly', 'single_user', 'pvarilly@broadinstitute.org', '0193CA-41033B-3FF267', 'GCID 5008157', NULL),
-  ('gcid-data-core', 'shared', NULL, '00864F-515C74-8B1641', 'GCID 5008152', NULL);
+  ('gcid-data-core',  'shared',      NULL,                          '00864F-515C74-8B1641', 'GCID 5008152', NULL);
 ```
 
-### Step 2: Audit log sink setup (for shared projects)
-
-**gcid-data-core**: Already configured. Audit logs flow to `billing_export.cloudaudit_googleapis_com_data_access_*`.
-
-**Future shared projects**: See "Adding New Users/Projects" section below.
-
-### Step 3: Create unified audit log view
-
-This view already exists as `billing_export.claude_usage_detailed`. We'll create a wrapper that adds project_id for multi-project support.
+### Step 2: Audit log views (for shared projects)
 
 **File: `vertex-ai/create-audit-views.sql`**
 
-```sql
--- claude_code_audit_logs: Unified view of all audit logs from shared projects
--- Extends existing claude_usage_detailed to include project_id for multi-project support
-CREATE OR REPLACE VIEW `gcid-data-core.custom_sada_billing_views.claude_code_audit_logs` AS
-SELECT
-  protopayload_auditlog.authenticationInfo.principalEmail AS user_email,
-  resource.labels.project_id AS project_id,
-  REGEXP_EXTRACT(protopayload_auditlog.resourceName, r'/models/(claude-[a-z0-9.-]+?)(?:@|$)') AS model_name,
-  DATE(timestamp) AS usage_date,
-  timestamp
-FROM `gcid-data-core.billing_export.cloudaudit_googleapis_com_data_access_*`
-WHERE protopayload_auditlog.serviceName = 'aiplatform.googleapis.com'
-  AND protopayload_auditlog.resourceName LIKE '%anthropic%';
+Two views:
 
--- claude_code_daily_usage: API call counts by user/day/project for proportional attribution
-CREATE OR REPLACE VIEW `gcid-data-core.custom_sada_billing_views.claude_code_daily_usage` AS
-SELECT
-  usage_date,
-  project_id,
-  user_email,
-  model_name,
-  COUNT(*) AS request_count
-FROM `gcid-data-core.custom_sada_billing_views.claude_code_audit_logs`
-GROUP BY 1, 2, 3, 4;
-```
+1. **`claude_code_audit_logs`** — CTE-based view extracting `user_email`, `project_id`, `model_name`, and derived `model_family` from audit log wildcard tables. Filters to `aiplatform.googleapis.com` + `anthropic` resources.
 
-### Step 4: Create unified per-user cost view
+2. **`claude_code_daily_usage`** — Aggregation: `GROUP BY (usage_date, project_id, user_email, model_family)` producing `request_count`.
 
-This is the main view that joins billing data with user attribution. **Uses the materialized `billing_data` table (not SADA view) to avoid quota issues.**
+### Step 3: Unified per-user cost view
 
 **File: `vertex-ai/create-user-costs-view.sql`**
 
-```sql
--- claude_code_user_costs: Per-user costs across all Claude Code projects
--- Uses billing_data (materialized daily) - NOT the SADA view directly
-CREATE OR REPLACE VIEW `gcid-data-core.custom_sada_billing_views.claude_code_user_costs` AS
+Main view `claude_code_user_costs` with CTEs:
 
--- Single-user projects: user = project owner, direct cost attribution
-WITH single_user_costs AS (
-  SELECT
-    b.usage_date,
-    p.user_email,
-    b.project_id,
-    p.funding_source,
-    b.billing_account_id,
-    b.service_category,
-    b.sku_description,
-    b.net_cost AS cost,
-    'direct' AS attribution_method
-  FROM `gcid-data-core.custom_sada_billing_views.billing_data` b
-  JOIN `gcid-data-core.custom_sada_billing_views.claude_code_projects` p
-    ON b.project_id = p.project_id
-  WHERE p.project_type = 'single_user'
-    AND b.service_category = 'Vertex AI'  -- matches service_category in billing_data
-),
+- **`billing_with_model`** — Adds `model_family` to `billing_data` rows (Vertex AI only) via CASE on `sku_description`
+- **`single_user_costs`** — Direct attribution: JOIN billing to mapping table, `cost = net_cost`
+- **`shared_model_totals`** — Total request counts per `(project, date, model_family)`
+- **`shared_user_costs`** — LEFT JOIN billing to audit data on `(project, date, model_family)`. Proportional: `cost = net_cost * SAFE_DIVIDE(user_requests, total_requests)`. Unmatched → `'unattributed'`
+- **UNION ALL** both branches
 
--- Shared projects: proportional attribution by API call share
-shared_project_daily_totals AS (
-  SELECT
-    usage_date,
-    project_id,
-    SUM(request_count) AS total_requests
-  FROM `gcid-data-core.custom_sada_billing_views.claude_code_daily_usage`
-  GROUP BY 1, 2
-),
+Output columns: `usage_date, user_email, project_id, funding_source, billing_account_id, sku_description, model_family, cost, usage_amount, usage_unit, attribution_method`
 
-shared_user_costs AS (
-  SELECT
-    b.usage_date,
-    u.user_email,
-    b.project_id,
-    p.funding_source,
-    b.billing_account_id,
-    b.service_category,
-    b.sku_description,
-    b.net_cost * SAFE_DIVIDE(u.request_count, t.total_requests) AS cost,
-    'proportional' AS attribution_method
-  FROM `gcid-data-core.custom_sada_billing_views.billing_data` b
-  JOIN `gcid-data-core.custom_sada_billing_views.claude_code_projects` p
-    ON b.project_id = p.project_id
-  JOIN `gcid-data-core.custom_sada_billing_views.claude_code_daily_usage` u
-    ON b.project_id = u.project_id AND b.usage_date = u.usage_date
-  JOIN shared_project_daily_totals t
-    ON u.project_id = t.project_id AND u.usage_date = t.usage_date
-  WHERE p.project_type = 'shared'
-    AND b.service_category = 'Vertex AI'
-    AND t.total_requests > 0
-)
+### Step 4: Audit sink setup script
 
-SELECT * FROM single_user_costs
-UNION ALL
-SELECT * FROM shared_user_costs;
-```
+**File: `vertex-ai/setup-audit-sink.sh`**
+
+Script taking `<project-id>` as argument:
+1. Verify project exists
+2. Enable Data Access audit logs for `aiplatform.googleapis.com`
+3. Create/update log sink routing to `gcid-data-core.billing_export`
+4. Grant sink's service account `bigquery.dataEditor`
+5. Print next steps (mapping table INSERT)
 
 ### Step 5: Looker Studio Dashboard
 
-Create a new Looker Studio dashboard with data source `claude_code_user_costs`:
+Data source: `claude_code_user_costs`
 
-**Filters:**
-- Date range (usage_date)
-- User (user_email)
-- Project (project_id)
-- Funding Source (funding_source)
+**Filters:** Date range, User, Project, Model, Funding Source, Billing Account
 
 **Charts:**
 | Chart | Type | Dimension | Metric |
@@ -176,92 +203,60 @@ Create a new Looker Studio dashboard with data source `claude_code_user_costs`:
 | Total Cost | Scorecard | - | SUM(cost) |
 | Cost by User | Bar chart | user_email | SUM(cost) |
 | Daily Trend | Stacked bar | usage_date | SUM(cost), breakdown by user_email |
+| Cost by Model | Bar chart | model_family | SUM(cost) |
 | Cost by Funding Source | Pie chart | funding_source | SUM(cost) |
-| User Details | Table | user_email, project_id, sku_description | SUM(cost) |
+| User Details | Table | user_email, model_family, project_id, sku_description | SUM(cost) |
+
+## Execution Order
+
+1. `create-project-mapping.sql` (no dependencies)
+2. `setup-audit-sink.sh gcid-data-core` (if not already configured)
+3. `create-audit-views.sql` (depends on audit logs in billing_export)
+4. `create-user-costs-view.sql` (depends on mapping table + audit views)
+
+Each SQL file: `bq query --nouse_legacy_sql --project_id=gcid-data-core < vertex-ai/FILE.sql`
 
 ## Adding New Users/Projects
 
-### New single-user projects (one user = one project)
+### New single-user project
 
-Just add to the mapping table - billing data will automatically appear via SADA export:
+One INSERT, no audit sink needed:
 ```sql
-INSERT INTO `gcid-data-core.custom_sada_billing_views.claude_code_projects` VALUES
-  ('coding-newuser', 'single_user', 'newuser@broadinstitute.org', 'NEW_BILLING_ACCT_ID', 'New Funding Source', CURRENT_DATE());
+INSERT INTO `gcid-data-core.custom_sada_billing_views.claude_code_projects`
+  (project_id, project_type, user_email, billing_account_id, funding_source, enabled_date)
+VALUES ('coding-newuser', 'single_user', 'newuser@broadinstitute.org', 'BILLING_ACCT_ID', 'Source Name', CURRENT_DATE());
 ```
 
-### New shared projects (multiple users sharing one project)
+### New shared project
 
-For a new shared project like `gcid-collab` on a different billing account:
-
-**Step 1: Add to mapping table**
+Two steps:
+1. Run `./vertex-ai/setup-audit-sink.sh <project-id>` (configures audit log routing)
+2. Insert mapping row:
 ```sql
-INSERT INTO `gcid-data-core.custom_sada_billing_views.claude_code_projects` VALUES
-  ('gcid-collab', 'shared', NULL, 'NEW_BILLING_ACCT_ID', 'Collab Fund', CURRENT_DATE());
+INSERT INTO `gcid-data-core.custom_sada_billing_views.claude_code_projects`
+  (project_id, project_type, user_email, billing_account_id, funding_source, enabled_date)
+VALUES ('new-shared-project', 'shared', NULL, 'BILLING_ACCT_ID', 'Source Name', CURRENT_DATE());
 ```
 
-**Step 2: Enable audit logging on the new project**
-```bash
-# Enable Data Access audit logs for Vertex AI
-gcloud logging settings update \
-  --project=gcid-collab \
-  --audit-log-filter='service=aiplatform.googleapis.com,method=*'
-```
-
-**Step 3: Create log sink to route audit logs to central BigQuery**
-```bash
-# Create sink from new project to central BQ dataset
-gcloud logging sinks create vertex-ai-audit-logs \
-  bigquery.googleapis.com/projects/gcid-data-core/datasets/billing_export \
-  --project=gcid-collab \
-  --log-filter='resource.type="audited_resource"
-    protoPayload.serviceName="aiplatform.googleapis.com"
-    protoPayload.methodName:"predict"'
-
-# Get the sink's service account
-SINK_SA=$(gcloud logging sinks describe vertex-ai-audit-logs \
-  --project=gcid-collab --format='value(writerIdentity)')
-
-# Grant BigQuery Data Editor to the sink's service account
-bq add-iam-policy-binding \
-  --member="${SINK_SA}" \
-  --role="roles/bigquery.dataEditor" \
-  gcid-data-core:billing_export
-```
-
-**Why this works:**
-- **Billing data**: SADA export already includes ALL Broad billing accounts. Any new billing account automatically appears in `billing_data` - no additional setup needed.
-- **Audit logs**: New projects need their sink configured once. All sinks write to the same `billing_export` dataset using wildcard tables (`cloudaudit_googleapis_com_data_access_*`).
-
-## Files to Create
-
-| File | Purpose |
-|------|---------|
-| `vertex-ai/create-project-mapping.sql` | DDL for project mapping table |
-| `vertex-ai/create-audit-views.sql` | Audit log and usage views |
-| `vertex-ai/create-user-costs-view.sql` | Main unified cost view |
-| `vertex-ai/setup-audit-sink.sh` | Script to create audit log sink for a project |
+No view changes needed — views handle multiple projects via JOINs. Billing data appears automatically via SADA export. Audit logs route via the sink to the central wildcard table.
 
 ## Verification
 
-**1. Verify data appears for both project types:**
+After creating all objects:
+
+**1. Check model_family distribution in audit logs:**
 ```sql
-SELECT
-  attribution_method,
-  COUNT(DISTINCT user_email) AS users,
-  COUNT(DISTINCT project_id) AS projects,
-  ROUND(SUM(cost), 2) AS total_cost
-FROM `gcid-data-core.custom_sada_billing_views.claude_code_user_costs`
-WHERE usage_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 14 DAY)
-GROUP BY 1;
+SELECT model_family, COUNT(*) AS requests, COUNT(DISTINCT user_email) AS users
+FROM `gcid-data-core.custom_sada_billing_views.claude_code_daily_usage`
+GROUP BY 1 ORDER BY 2 DESC;
 ```
 
-**2. Verify proportional attribution sums match project totals:**
+**2. Verify dollar conservation for shared projects:**
 ```sql
--- Compare user-attributed costs vs raw billing data for shared projects
 WITH attributed AS (
   SELECT project_id, usage_date, SUM(cost) AS attributed_cost
   FROM `gcid-data-core.custom_sada_billing_views.claude_code_user_costs`
-  WHERE attribution_method = 'proportional'
+  WHERE project_id IN (SELECT project_id FROM `gcid-data-core.custom_sada_billing_views.claude_code_projects` WHERE project_type = 'shared')
   GROUP BY 1, 2
 ),
 raw AS (
@@ -272,26 +267,30 @@ raw AS (
   GROUP BY 1, 2
 )
 SELECT
-  a.project_id, a.usage_date,
-  ROUND(a.attributed_cost, 2) AS attributed,
-  ROUND(r.billing_cost, 2) AS actual,
-  ROUND(ABS(a.attributed_cost - r.billing_cost), 4) AS diff
+  ROUND(SUM(a.attributed_cost), 2) AS total_attributed,
+  ROUND(SUM(r.billing_cost), 2) AS total_billing,
+  ROUND(ABS(SUM(a.attributed_cost) - SUM(r.billing_cost)), 4) AS discrepancy
 FROM attributed a
-JOIN raw r ON a.project_id = r.project_id AND a.usage_date = r.usage_date
-ORDER BY diff DESC
-LIMIT 10;
+FULL OUTER JOIN raw r USING (project_id, usage_date);
 ```
 
-**3. View per-user cost summary:**
+**3. Per-user cost summary:**
 ```sql
 SELECT
-  user_email,
-  funding_source,
-  attribution_method,
+  user_email, model_family, funding_source, attribution_method,
   ROUND(SUM(cost), 2) AS total_cost,
   COUNT(DISTINCT usage_date) AS active_days
 FROM `gcid-data-core.custom_sada_billing_views.claude_code_user_costs`
 WHERE usage_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
-GROUP BY 1, 2, 3
+GROUP BY 1, 2, 3, 4
 ORDER BY total_cost DESC;
 ```
+
+## Files Summary
+
+| File | Purpose |
+|------|---------|
+| `vertex-ai/create-project-mapping.sql` | DDL + initial data for project mapping table |
+| `vertex-ai/create-audit-views.sql` | Audit log views with model_family extraction |
+| `vertex-ai/create-user-costs-view.sql` | Main unified per-user cost view |
+| `vertex-ai/setup-audit-sink.sh` | Script to configure audit log sink for shared projects |
