@@ -22,8 +22,7 @@ SELECT
     AS terra_billing_project,
   (SELECT value FROM UNNEST(b.project.labels) WHERE key = 'workspacename')
     AS terra_workspace_name,
-  (SELECT value FROM UNNEST(b.project.labels) WHERE key = 'team')
-    AS team,
+  t.team AS team,
   b.service.description AS service_name,
   CASE
     WHEN b.service.description = 'Compute Engine' THEN 'Compute'
@@ -47,3 +46,5 @@ SELECT
 FROM `broad-gcp-billing.gcp_billing_export_views.sada_billing_export_resource_v1_001AC2_2B914D_822931` b
 LEFT JOIN `gcid-data-core.custom_sada_billing_views.billing_account_names` n
   ON b.billing_account_id = n.billing_account_id
+LEFT JOIN `gcid-data-core.custom_sada_billing_views.project_team_mapping` t
+  ON b.project.id = t.project_id

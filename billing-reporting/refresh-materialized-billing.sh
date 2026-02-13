@@ -87,8 +87,7 @@ SELECT
     AS terra_billing_project,
   (SELECT value FROM UNNEST(b.project.labels) WHERE key = 'workspacename')
     AS terra_workspace_name,
-  (SELECT value FROM UNNEST(b.project.labels) WHERE key = 'team')
-    AS team,
+  t.team AS team,
   b.service.description AS service_name,
   CASE
     WHEN b.service.description = 'Compute Engine' THEN 'Compute'
@@ -110,8 +109,10 @@ SELECT
   b.usage.amount AS usage_amount,
   b.usage.unit AS usage_unit
 FROM \`${SADA_EXPORT}\` b
-LEFT JOIN \`${PROJECT}.${NAMES_TABLE}\` n
+INNER JOIN \`${PROJECT}.${NAMES_TABLE}\` n
   ON b.billing_account_id = n.billing_account_id
+LEFT JOIN \`${PROJECT}.${DATASET}.project_team_mapping\` t
+  ON b.project.id = t.project_id
 WHERE b.usage_start_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 90 DAY)
 EOF
 echo "  Insert complete."
