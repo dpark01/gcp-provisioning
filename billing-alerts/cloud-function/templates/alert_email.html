@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      color: #333;
+      max-width: 700px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    h1 {
+      color: #d32f2f;
+      font-size: 20px;
+      border-bottom: 2px solid #d32f2f;
+      padding-bottom: 8px;
+    }
+    .alert-card {
+      background: #fafafa;
+      border: 1px solid #e0e0e0;
+      border-left: 4px solid #d32f2f;
+      border-radius: 4px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .alert-name {
+      font-weight: 600;
+      font-size: 16px;
+      margin: 0 0 8px 0;
+    }
+    .alert-type {
+      display: inline-block;
+      background: #ef5350;
+      color: white;
+      padding: 2px 8px;
+      border-radius: 3px;
+      font-size: 12px;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+    table.details {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    table.details td {
+      padding: 4px 8px;
+      vertical-align: top;
+    }
+    table.details td:first-child {
+      color: #757575;
+      white-space: nowrap;
+      width: 160px;
+    }
+    .cost {
+      font-weight: 600;
+      color: #d32f2f;
+    }
+    .footer {
+      margin-top: 24px;
+      padding-top: 16px;
+      border-top: 1px solid #e0e0e0;
+      font-size: 12px;
+      color: #999;
+    }
+  </style>
+</head>
+<body>
+  <h1>GCP Billing Cost Alert</h1>
+
+  <p>The following billing alert{{ 's' if alerts|length > 1 else '' }} fired on {{ alerts[0].fired_at.strftime('%Y-%m-%d %H:%M UTC') }}:</p>
+
+  {% for alert in alerts %}
+  <div class="alert-card">
+    <p class="alert-name">{{ alert.alert_name }}</p>
+    <span class="alert-type">{{ alert.alert_type }}</span>
+
+    <table class="details">
+      <tr>
+        <td>Scope</td>
+        <td>{{ alert.scope_description or 'All' }}</td>
+      </tr>
+      <tr>
+        <td>Rolling {{ '7' }}-day cost</td>
+        <td class="cost">${{ "%.2f"|format(alert.rolling_7d_cost) }}</td>
+      </tr>
+      <tr>
+        <td>Threshold</td>
+        <td>${{ "%.2f"|format(alert.threshold_value) }}</td>
+      </tr>
+      {% if alert.alert_type in ('stddev', 'percent') %}
+      <tr>
+        <td>Weekly average (60d)</td>
+        <td>${{ "%.2f"|format(alert.weekly_mean) if alert.weekly_mean is not none else 'N/A' }}</td>
+      </tr>
+      {% endif %}
+      {% if alert.alert_type == 'stddev' %}
+      <tr>
+        <td>Weekly std dev</td>
+        <td>${{ "%.2f"|format(alert.weekly_stddev) if alert.weekly_stddev is not none else 'N/A' }}</td>
+      </tr>
+      {% endif %}
+      {% if alert.alert_type in ('stddev', 'percent') %}
+      <tr>
+        <td>Data points</td>
+        <td>{{ alert.num_weekly_datapoints or 'N/A' }} weeks</td>
+      </tr>
+      {% endif %}
+    </table>
+  </div>
+  {% endfor %}
+
+  <div class="footer">
+    <p>This alert was generated automatically. To manage alert configurations, update the <code>billing_alert_config</code> table in BigQuery.</p>
+    <p>Project: gcid-data-core &middot; Dataset: custom_sada_billing_views</p>
+  </div>
+</body>
+</html>
