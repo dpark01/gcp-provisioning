@@ -19,7 +19,7 @@ PROJECT_ID = os.environ.get("GCP_PROJECT", "gcid-data-core")
 DATASET = "custom_sada_billing_views"
 TABLE = "billing_alerts_log"
 SECRET_NAME = f"projects/{PROJECT_ID}/secrets/sendgrid-api-key/versions/latest"
-FROM_EMAIL = os.environ.get("FROM_EMAIL", "billing-alerts@broadinstitute.org")
+FROM_EMAIL = os.environ.get("FROM_EMAIL", "gcid-billing-alerts@broadinstitute.org")
 
 # Jinja2 template setup
 template_dir = os.path.join(os.path.dirname(__file__), "templates")
