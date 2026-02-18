@@ -80,7 +80,7 @@ SELECT
 FROM `gcid-data-core.billing_export.gcp_billing_export_resource_v1_00864F_515C74_8B1641`
 LEFT JOIN `gcid-data-core.custom_sada_billing_views.billing_account_names` n
   USING (billing_account_id)
-WHERE service.description LIKE 'Claude%'
+WHERE (service.description LIKE 'Claude%' OR service.description = 'Vertex AI')
   AND DATE(usage_start_time) >= DATE '2026-02-15'
 
 UNION ALL
@@ -104,7 +104,7 @@ SELECT
 FROM `broad-hvp-dasc.billing_export.gcp_billing_export_resource_v1_011F41_0941F7_749F4B`
 LEFT JOIN `gcid-data-core.custom_sada_billing_views.billing_account_names` n
   USING (billing_account_id)
-WHERE service.description LIKE 'Claude%'
+WHERE (service.description LIKE 'Claude%' OR service.description = 'Vertex AI')
   AND DATE(usage_start_time) >= DATE '2026-02-15'
 
 UNION ALL
@@ -128,7 +128,7 @@ SELECT
 FROM `gcid-viral-seq.billing_export.gcp_billing_export_resource_v1_0193CA_41033B_3FF267`
 LEFT JOIN `gcid-data-core.custom_sada_billing_views.billing_account_names` n
   USING (billing_account_id)
-WHERE service.description LIKE 'Claude%'
+WHERE (service.description LIKE 'Claude%' OR service.description = 'Vertex AI')
   AND DATE(usage_start_time) >= DATE '2026-02-15'
 
 UNION ALL
@@ -152,7 +152,7 @@ SELECT
 FROM `sabeti-ai.billing_export.gcp_billing_export_resource_v1_01EABF_8D854B_B4B3D0`
 LEFT JOIN `gcid-data-core.custom_sada_billing_views.billing_account_names` n
   USING (billing_account_id)
-WHERE service.description LIKE 'Claude%'
+WHERE (service.description LIKE 'Claude%' OR service.description = 'Vertex AI')
   AND DATE(usage_start_time) >= DATE '2026-02-15'
 
 UNION ALL
@@ -176,5 +176,5 @@ SELECT
 FROM `dsi-resources.billing_export.gcp_billing_export_resource_v1_013A53_04CB08_63E4C8`
 LEFT JOIN `gcid-data-core.custom_sada_billing_views.billing_account_names` n
   USING (billing_account_id)
-WHERE service.description LIKE 'Claude%'
+WHERE (service.description LIKE 'Claude%' OR service.description = 'Vertex AI')
   AND DATE(usage_start_time) >= DATE '2026-02-15';

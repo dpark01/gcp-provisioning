@@ -58,6 +58,9 @@ WITH billing_with_model AS (
       ELSE LOWER(b.sku_description)
     END AS model_family
   FROM `gcid-data-core.custom_sada_billing_views.claude_vertex_ai_billing` b
+  -- Restrict to inference SKUs only (tokens/requests), excluding training,
+  -- storage, and compute SKUs that may appear under Vertex AI service.
+  WHERE REGEXP_CONTAINS(b.sku_description, r'(?i)(token|request|character)')
 ),
 
 -- ============================================================================
