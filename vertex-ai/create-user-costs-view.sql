@@ -8,7 +8,7 @@
 -- to ensure users of expensive models are attributed correctly.
 --
 -- Reads from:
---   - billing_data (materialized table, refreshed daily)
+--   - claude_vertex_ai_billing (union view over direct billing exports, ~6h latency)
 --   - claude_code_projects (mapping table)
 --   - claude_code_daily_usage (audit log aggregation view)
 --
@@ -37,6 +37,8 @@ WITH billing_with_model AS (
         OR LOWER(b.sku_description) LIKE '%3 opus%'            THEN 'opus-3'
       -- 4.x models: sub-versions BEFORE base version (first match wins)
       -- Google uses both dots (4.1, 4.5) and spaces (4 5, 4 6) inconsistently
+      WHEN LOWER(b.sku_description) LIKE '%sonnet 4.6%'
+        OR LOWER(b.sku_description) LIKE '%sonnet 4 6%'       THEN 'sonnet-4.6'
       WHEN LOWER(b.sku_description) LIKE '%sonnet 4.5%'
         OR LOWER(b.sku_description) LIKE '%sonnet 4 5%'       THEN 'sonnet-4.5'
       WHEN LOWER(b.sku_description) LIKE '%sonnet 4%'
@@ -55,8 +57,7 @@ WITH billing_with_model AS (
       -- Graceful fallback: raw SKU description instead of generic 'other'
       ELSE LOWER(b.sku_description)
     END AS model_family
-  FROM `gcid-data-core.custom_sada_billing_views.billing_data` b
-  WHERE b.service_category = 'Vertex AI'
+  FROM `gcid-data-core.custom_sada_billing_views.claude_vertex_ai_billing` b
 ),
 
 -- ============================================================================

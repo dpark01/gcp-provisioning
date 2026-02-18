@@ -13,52 +13,63 @@ Two usage patterns for tracking Claude Code (Vertex AI) costs:
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    DATA SOURCES                                  │
-├──────────────────────────┬──────────────────────────────────────┤
-│  SADA Billing Export     │  Audit Logs (per shared project)     │
-│  (all 534 billing accts) │  (only needed for shared projects)   │
-│                          │                                      │
-│  sku_description has     │  Has user_email + model_name         │
-│  per-model detail        │  per API call                        │
-│                          │                                      │
-│                          │  gcid-data-core ──sink──┐            │
-│                          │  future-proj-X  ──sink──┤            │
-│                          │  future-proj-Y  ──sink──┘            │
-└────────────┬─────────────┴──────────────┬───────────────────────┘
-             │                            │
-             ▼                            ▼
-┌────────────────────────┐  ┌─────────────────────────────────────┐
-│ billing_data           │  │ billing_export.cloudaudit_*          │
-│ (materialized, daily)  │  │ (single central dataset, wildcard)  │
-│ 90-day rolling window  │  │ resource.labels.project_id          │
-│ partitioned by date    │  │ distinguishes source project        │
-└────────────┬───────────┘  └──────────────┬──────────────────────┘
-             │                             │
-             │                             ▼
-             │               ┌──────────────────────────────┐
-             │               │ claude_code_audit_logs        │
-             │               │   (model_name + model_family) │
-             │               │ claude_code_daily_usage        │
-             │               │   (request counts per          │
-             │               │    user/day/model_family)      │
-             │               └──────────────┬───────────────┘
-             │                              │
-             ▼                              ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                    BILLING DATA SOURCES                              │
+├─────────────────────────────────────────────────────────────────────┤
+│  Direct GCP Billing Exports (~6h latency, partitioned)              │
+│                                                                     │
+│  gcid-data-core.billing_export   (00864F-515C74-8B1641)            │
+│  broad-hvp-dasc.billing_export   (011F41-0941F7-749F4B)            │
+│  gcid-viral-seq.billing_export   (0193CA-41033B-3FF267)            │
+│  sabeti-ai.billing_export        (01EABF-8D854B-B4B3D0)            │
+│  dsi-resources.billing_export    (013A53-04CB08-63E4C8)            │
+│                                                                     │
+│  + SADA billing_data for historical dates before cutoff             │
+└────────────────────────┬────────────────────────────────────────────┘
+                         │
+                         ▼
         ┌────────────────────────────────────────────┐
-        │        claude_code_projects                 │
-        │        (mapping table)                      │
-        │  ┌──────────────┬─────────────────────┐    │
-        │  │ single_user  │ shared              │    │
-        │  │ coding-dpark │ gcid-data-core      │    │
-        │  │ coding-carze │ (future-proj-X)     │    │
-        │  │ ...          │ (future-proj-Y)     │    │
-        │  └──────────────┴─────────────────────┘    │
+        │    claude_vertex_ai_billing                 │
+        │    (UNION ALL view, Vertex AI only)         │
+        │    Normalizes schema across exports         │
+        │    Joins billing_account_names              │
+        │    Historical cutoff: SADA before / direct  │
+        │    exports on+after transition date         │
         └────────────────────┬───────────────────────┘
                              │
-                             ▼
-        ┌────────────────────────────────────────────┐
-        │      claude_code_user_costs                 │
+┌────────────────────────────┼────────────────────────────────────────┐
+│  AUDIT LOG SOURCES         │  (only for shared projects)            │
+│                            │                                        │
+│  gcid-data-core ──sink──┐  │                                        │
+│  sabeti-ai      ──sink──┤  │                                        │
+│  future-proj    ──sink──┘  │                                        │
+│       │                    │                                        │
+│       ▼                    │                                        │
+│  billing_export.           │                                        │
+│    cloudaudit_*            │                                        │
+│       │                    │                                        │
+│       ▼                    │                                        │
+│  claude_code_audit_logs    │                                        │
+│  claude_code_daily_usage   │                                        │
+└────────────┬───────────────┘                                        │
+             │                                                        │
+             ▼                                                        │
+        ┌────────────────────────────────────────────┐                │
+        │        claude_code_projects                 │                │
+        │        (mapping table)                      │                │
+        │  ┌──────────────┬─────────────────────┐    │                │
+        │  │ single_user  │ shared              │    │                │
+        │  │ coding-dpark │ gcid-data-core      │    │                │
+        │  │ coding-carze │ sabeti-ai           │    │                │
+        │  │ ...          │ (future-proj)       │    │                │
+        │  └──────────────┴─────────────────────┘    │                │
+        └────────────────────┬───────────────────────┘                │
+                             │                                        │
+                             ▼                                        │
+        ┌────────────────────────────────────────────┐                │
+        │      claude_code_user_costs                 │◄───────────────┘
+        │                                             │
+        │  Reads from claude_vertex_ai_billing        │
         │                                             │
         │  single_user → direct attribution           │
         │    (user = project owner, full cost)         │
@@ -74,12 +85,47 @@ Two usage patterns for tracking Claude Code (Vertex AI) costs:
                     billing account, date
 ```
 
+## Billing Accounts
+
+| Cost Object | Billing Account ID | Export Project | Dataset | Status |
+|---|---|---|---|---|
+| 5008152 | `00864F-515C74-8B1641` | gcid-data-core | billing_export | Live |
+| 5008388 | `011F41-0941F7-749F4B` | broad-hvp-dasc | billing_export | Live |
+| 5008157 | `0193CA-41033B-3FF267` | gcid-viral-seq | billing_export | Live |
+| 6005589 | `01EABF-8D854B-B4B3D0` | sabeti-ai | billing_export | Live (no usage — new account) |
+| 6005319 | `013A53-04CB08-63E4C8` | dsi-resources | billing_export | Live |
+| 4500115 | `01B753-07D3AF-8A7587` | sabeti-encode | billing_export | Export configured, pending backfill |
+
+Export table naming convention: `gcp_billing_export_resource_v1_<ACCT_ID_WITH_UNDERSCORES>`
+
+**Note on sabeti-encode**: The `sabeti-encode` project's Vertex AI charges are ML training
+workloads (Colab Enterprise, A100 GPU training), not Claude model usage. The billing export
+is set up for completeness, but `sabeti-encode` is not in the `claude_code_projects` mapping
+table and does not appear in the Claude Code dashboard.
+
+## Data Freshness
+
+- **Direct billing exports**: ~2-4 hour latency in practice (partitioned, ~2 MB per query)
+- **SADA billing_data**: ~36 hour latency (used for historical data before transition cutoff only)
+- **Audit logs**: Near real-time (~5 minutes)
+
+The `claude_vertex_ai_billing` view uses a hardcoded date cutoff (`2026-02-15`) to split between SADA (historical) and direct exports (current). After 90+ days, the SADA portion naturally becomes empty as partitions expire.
+
+## Service Description in Direct Exports
+
+**Important**: In raw detailed billing exports, Claude models appear as their own top-level
+service descriptions (e.g., `Claude Opus 4.6`, `Claude Sonnet 4.5`) rather than under
+`Vertex AI`. SADA normalizes these to `service_category = 'Vertex AI'`, but the direct
+export portions of `claude_vertex_ai_billing` filter on `service.description LIKE 'Claude%'`.
+
 ## Existing Infrastructure
 
 **Already in place:**
-- SADA billing export → `custom_sada_billing_views.billing_data` (materialized, partitioned, 90-day rolling window, refreshed daily at 0900 UTC)
+- Direct billing exports → per-account tables in `billing_export` datasets (~2-4h latency)
+- `claude_vertex_ai_billing` → UNION ALL view across direct exports, filtered to `Claude%` services
+- SADA billing export → `custom_sada_billing_views.billing_data` (materialized, partitioned, 90-day rolling window, refreshed daily — used for historical data only)
 - Audit logs → `billing_export.cloudaudit_googleapis_com_data_access_*` (gcid-data-core only, currently)
-- Older views → `billing_export.claude_usage_detailed`, `claude_cost_per_user` (will be superseded)
+- Older views → `billing_export.claude_usage_detailed`, `claude_cost_per_user` (superseded)
 
 ## Key Design Decisions
 
@@ -89,7 +135,7 @@ Billing data and user identity live in different sources:
 
 | Source | Has cost/model? | Has user? |
 |--------|----------------|-----------|
-| `billing_data` (SADA) | Yes — per-SKU costs | No — project-level only |
+| `claude_vertex_ai_billing` (direct exports) | Yes — per-SKU costs | No — project-level only |
 | Audit logs | Model name per request | Yes — `principalEmail` |
 
 We join at **(project, date, model_family)** so users of expensive models are attributed correctly. A `model_family` key (e.g., `sonnet-4`, `opus-4`) normalizes model names from both sources via CASE expressions.
@@ -168,7 +214,7 @@ VALUES
   ('sabeti-ai',       'shared',      NULL);
 ```
 
-Billing account info (`billing_account_id`, `billing_account_name`) is derived from `billing_data` at query time, so the mapping table only stores what can't be looked up elsewhere.
+Billing account info (`billing_account_id`, `billing_account_name`) is derived from `claude_vertex_ai_billing` at query time, so the mapping table only stores what can't be looked up elsewhere.
 
 ### Step 2: Audit log views (for shared projects)
 
@@ -180,13 +226,19 @@ Two views:
 
 2. **`claude_code_daily_usage`** — Aggregation: `GROUP BY (usage_date, project_id, user_email, model_family)` producing `request_count`.
 
+### Step 2.5: Unified Vertex AI billing view
+
+**File: `vertex-ai/create-billing-union-view.sql`**
+
+View `claude_vertex_ai_billing` that UNION ALLs direct billing exports across all 5 billing accounts, filtered to Vertex AI. Includes a historical cutoff date: dates before the cutoff read from SADA `billing_data`, dates on or after read from direct exports. Joins `billing_account_names` for display names. Includes `export_time` for freshness monitoring.
+
 ### Step 3: Unified per-user cost view
 
 **File: `vertex-ai/create-user-costs-view.sql`**
 
 Main view `claude_code_user_costs` with CTEs:
 
-- **`billing_with_model`** — Adds `model_family` to `billing_data` rows (Vertex AI only) via CASE on `sku_description`
+- **`billing_with_model`** — Adds `model_family` to `claude_vertex_ai_billing` rows via CASE on `sku_description` (Vertex AI filtering already applied in the union view)
 - **`single_user_costs`** — Direct attribution: JOIN billing to mapping table, `cost = net_cost`
 - **`shared_model_totals`** — Total request counts per `(project, date, model_family)`
 - **`shared_user_costs`** — LEFT JOIN billing to audit data on `(project, date, model_family)`. Proportional: `cost = net_cost * SAFE_DIVIDE(user_requests, total_requests)`. Unmatched → `'unattributed'`
@@ -234,10 +286,14 @@ Data source: `claude_code_user_costs`
 
 ## Execution Order
 
-1. `create-project-mapping.sql` (no dependencies)
-2. `setup-audit-sink.sh gcid-data-core` (if not already configured)
-3. `create-audit-views.sql` (depends on audit logs in billing_export)
-4. `create-user-costs-view.sql` (depends on mapping table + audit views)
+1. `setup-billing-export.sh <project>` for each project needing a billing_export dataset
+2. **Manual**: Configure billing exports in Cloud Console for each billing account
+3. **Wait**: ~24 hours for initial data backfill into export tables
+4. `create-project-mapping.sql` (no dependencies)
+5. `setup-audit-sink.sh gcid-data-core` (if not already configured)
+6. `create-audit-views.sql` (depends on audit logs in billing_export)
+7. `create-billing-union-view.sql` (depends on export tables being populated)
+8. `create-user-costs-view.sql` (depends on mapping table + audit views + union view)
 
 Each SQL file: `bq query --nouse_legacy_sql --project_id=gcid-data-core < vertex-ai/FILE.sql`
 
@@ -263,20 +319,32 @@ INSERT INTO `gcid-data-core.custom_sada_billing_views.claude_code_projects`
 VALUES ('new-shared-project', 'shared', NULL);
 ```
 
-No view changes needed — views handle multiple projects via JOINs. Billing data appears automatically via SADA export. Audit logs route via the sink to the central wildcard table.
+If the project uses a billing account not yet in the union view, also add it:
+1. Run `./vertex-ai/setup-billing-export.sh <project>` to create the dataset
+2. Configure the billing export in Cloud Console
+3. Wait for backfill, then add the table to `create-billing-union-view.sql` and re-run
+
+Audit logs route via the sink to the central wildcard table.
 
 ## Verification
 
 After creating all objects:
 
-**1. Check model_family distribution in audit logs:**
+**1. Check data freshness per billing account:**
+```sql
+SELECT billing_account_name, MAX(usage_date) AS latest_date, MAX(export_time) AS latest_export
+FROM `gcid-data-core.custom_sada_billing_views.claude_vertex_ai_billing`
+GROUP BY 1;
+```
+
+**2. Check model_family distribution in audit logs:**
 ```sql
 SELECT model_family, COUNT(*) AS requests, COUNT(DISTINCT user_email) AS users
 FROM `gcid-data-core.custom_sada_billing_views.claude_code_daily_usage`
 GROUP BY 1 ORDER BY 2 DESC;
 ```
 
-**2. Verify dollar conservation for shared projects:**
+**3. Verify dollar conservation for shared projects:**
 ```sql
 WITH attributed AS (
   SELECT project_id, usage_date, SUM(cost) AS attributed_cost
@@ -286,9 +354,8 @@ WITH attributed AS (
 ),
 raw AS (
   SELECT project_id, usage_date, SUM(net_cost) AS billing_cost
-  FROM `gcid-data-core.custom_sada_billing_views.billing_data`
-  WHERE service_category = 'Vertex AI'
-    AND project_id IN (SELECT project_id FROM `gcid-data-core.custom_sada_billing_views.claude_code_projects` WHERE project_type = 'shared')
+  FROM `gcid-data-core.custom_sada_billing_views.claude_vertex_ai_billing`
+  WHERE project_id IN (SELECT project_id FROM `gcid-data-core.custom_sada_billing_views.claude_code_projects` WHERE project_type = 'shared')
   GROUP BY 1, 2
 )
 SELECT
@@ -299,7 +366,7 @@ FROM attributed a
 FULL OUTER JOIN raw r USING (project_id, usage_date);
 ```
 
-**3. Per-user cost summary:**
+**4. Per-user cost summary:**
 ```sql
 SELECT
   user_email, model_family, billing_account_name, attribution_method,
@@ -317,5 +384,7 @@ ORDER BY total_cost DESC;
 |------|---------|
 | `vertex-ai/create-project-mapping.sql` | DDL + initial data for project mapping table |
 | `vertex-ai/create-audit-views.sql` | Audit log views with model_family extraction |
-| `vertex-ai/create-user-costs-view.sql` | Main unified per-user cost view |
+| `vertex-ai/create-billing-union-view.sql` | UNION ALL view across direct billing exports, filtered to Vertex AI |
+| `vertex-ai/create-user-costs-view.sql` | Main unified per-user cost view (reads from union view) |
 | `vertex-ai/setup-audit-sink.sh` | Script to configure audit log sink for shared projects |
+| `vertex-ai/setup-billing-export.sh` | Creates BQ dataset + prints Cloud Console instructions for billing export |

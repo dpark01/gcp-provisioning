@@ -47,6 +47,7 @@ SELECT
     WHEN model_name LIKE 'claude-3-opus%'
       OR model_name LIKE 'claude-3.0-opus%'        THEN 'opus-3'
     -- 4.x models: sub-versions BEFORE base version (first match wins)
+    WHEN model_name LIKE 'claude-sonnet-4-6%'      THEN 'sonnet-4.6'
     WHEN model_name LIKE 'claude-sonnet-4-5%'      THEN 'sonnet-4.5'
     WHEN model_name LIKE 'claude-sonnet-4%'        THEN 'sonnet-4'
     WHEN model_name LIKE 'claude-opus-4-6%'        THEN 'opus-4.6'
