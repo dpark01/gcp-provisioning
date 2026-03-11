@@ -21,6 +21,7 @@ Two usage patterns for tracking Claude Code (Vertex AI) costs:
 │  gcid-data-core.billing_export   (00864F-515C74-8B1641)            │
 │  broad-hvp-dasc.billing_export   (011F41-0941F7-749F4B)            │
 │  gcid-viral-seq.billing_export   (0193CA-41033B-3FF267)            │
+│  gcid-viral-seq.billing_export   (01EA4B-6607E9-C37280)            │
 │  sabeti-ai.billing_export        (01EABF-8D854B-B4B3D0)            │
 │  dsi-resources.billing_export    (013A53-04CB08-63E4C8)            │
 │                                                                     │
@@ -92,6 +93,7 @@ Two usage patterns for tracking Claude Code (Vertex AI) costs:
 | 5008152 | `00864F-515C74-8B1641` | gcid-data-core | billing_export | Live |
 | 5008388 | `011F41-0941F7-749F4B` | broad-hvp-dasc | billing_export | Live |
 | 5008157 | `0193CA-41033B-3FF267` | gcid-viral-seq | billing_export | Live |
+| 5002079 | `01EA4B-6607E9-C37280` | gcid-viral-seq | billing_export | Export configured, pending backfill |
 | 6005589 | `01EABF-8D854B-B4B3D0` | sabeti-ai | billing_export | Live (no usage — new account) |
 | 6005319 | `013A53-04CB08-63E4C8` | dsi-resources | billing_export | Live |
 | 4500115 | `01B753-07D3AF-8A7587` | sabeti-encode | billing_export | Export configured, pending backfill |
@@ -121,7 +123,7 @@ export portions of `claude_vertex_ai_billing` filter on `service.description LIK
 ## Existing Infrastructure
 
 **Already in place:**
-- Direct billing exports → per-account tables in `billing_export` datasets (~2-4h latency)
+- Direct billing exports → per-account tables in `billing_export` datasets (~2-4h latency, 6 billing accounts)
 - `claude_vertex_ai_billing` → UNION ALL view across direct exports, filtered to `Claude%` services
 - SADA billing export → `custom_sada_billing_views.billing_data` (materialized, partitioned, 90-day rolling window, refreshed daily — used for historical data only)
 - Audit logs → `billing_export.cloudaudit_googleapis_com_data_access_*` (gcid-data-core only, currently)

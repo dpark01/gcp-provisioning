@@ -22,6 +22,7 @@
 --   00864F-515C74-8B1641 → gcid-data-core.billing_export
 --   011F41-0941F7-749F4B → broad-hvp-dasc.billing_export
 --   0193CA-41033B-3FF267 → gcid-viral-seq.billing_export
+--   01EA4B-6607E9-C37280 → gcid-viral-seq.billing_export
 --   01EABF-8D854B-B4B3D0 → sabeti-ai.billing_export
 --   013A53-04CB08-63E4C8 → dsi-resources.billing_export
 --
@@ -174,6 +175,30 @@ SELECT
   usage.unit AS usage_unit,
   export_time
 FROM `dsi-resources.billing_export.gcp_billing_export_resource_v1_013A53_04CB08_63E4C8`
+LEFT JOIN `gcid-data-core.custom_sada_billing_views.billing_account_names` n
+  USING (billing_account_id)
+WHERE (service.description LIKE 'Claude%' OR service.description = 'Vertex AI')
+  AND DATE(usage_start_time) >= DATE '2026-02-15'
+
+UNION ALL
+
+-- ============================================================================
+-- Direct export: gcid-viral-seq (billing account 01EA4B-6607E9-C37280, CO 5002079)
+-- ============================================================================
+SELECT
+  billing_account_id,
+  n.display_name AS billing_account_name,
+  DATE(usage_start_time) AS usage_date,
+  project.id AS project_id,
+  service.description AS service_name,
+  sku.description AS sku_description,
+  location.region AS region,
+  cost,
+  cost + IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c), 0) AS net_cost,
+  usage.amount AS usage_amount,
+  usage.unit AS usage_unit,
+  export_time
+FROM `gcid-viral-seq.billing_export.gcp_billing_export_resource_v1_01EA4B_6607E9_C37280`
 LEFT JOIN `gcid-data-core.custom_sada_billing_views.billing_account_names` n
   USING (billing_account_id)
 WHERE (service.description LIKE 'Claude%' OR service.description = 'Vertex AI')

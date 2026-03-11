@@ -52,7 +52,7 @@ else
     echo ""
     echo "Projects needing setup:"
     echo "  broad-hvp-dasc   (billing account 011F41-0941F7-749F4B)"
-    echo "  gcid-viral-seq   (billing account 0193CA-41033B-3FF267)"
+    echo "  gcid-viral-seq   (billing account 0193CA-41033B-3FF267, 01EA4B-6607E9-C37280)"
     echo "  sabeti-ai        (billing account 01EABF-8D854B-B4B3D0)"
     echo "  dsi-resources    (billing account 013A53-04CB08-63E4C8)"
     exit 1
