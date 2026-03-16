@@ -30,7 +30,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 step="${1:-all}"
 if [[ "$step" == "--step" ]]; then
-  step="${2:?Usage: $0 --step <apis|bucket|lifecycle|sa|iam|eventarc|instructions|function>}"
+  step="${2:?Usage: $0 --step <apis|bucket|lifecycle|sa|iam|eventarc|instructions|function|trigger>}"
 fi
 
 run_step() {
@@ -168,10 +168,10 @@ if run_step "instructions"; then
   echo "    Done."
 fi
 
-# --- Step 8: Deploy Cloud Function (HTTP) + Eventarc trigger ---
+# --- Step 8: Deploy Cloud Function (HTTP-triggered) ---
 # Event-triggered Cloud Functions are capped at 540s timeout, too short for
-# long STT jobs. Instead, deploy as HTTP-triggered (supports 3600s) with a
-# separate Eventarc trigger that routes GCS events to the function URL.
+# long STT jobs. Deploy as HTTP-triggered (supports 3600s) with a separate
+# Eventarc trigger (created in step 9) that routes GCS events to the function.
 if run_step "function"; then
   echo "==> Deploying Cloud Function (HTTP-triggered)..."
   gcloud functions deploy "$FUNCTION_NAME" \
@@ -184,19 +184,21 @@ if run_step "function"; then
     --trigger-http \
     --no-allow-unauthenticated \
     --service-account="$SA_EMAIL" \
-    --set-env-vars="GCP_PROJECT=${PROJECT},STT_MODEL=chirp_3,STT_REGION=${REGION},SUMMARY_MODEL=gemini-2.0-flash" \
+    --set-env-vars="GCP_PROJECT=${PROJECT},STT_MODEL=chirp_2,STT_REGION=${REGION},SUMMARY_MODEL=gemini-2.5-flash,VERTEX_REGION=${REGION}" \
     --timeout=3600s \
     --memory=512Mi \
     --max-instances=3
+  echo "    Done."
+fi
 
+# --- Step 9: Create Eventarc trigger ---
+# Only needs to run once (or after trigger deletion). Recreating the trigger
+# causes a ~2 min propagation delay, so this is separated from function deploy.
+if run_step "trigger"; then
   echo "==> Creating Eventarc trigger..."
   # Delete existing trigger if present (idempotent)
   gcloud eventarc triggers delete "$FUNCTION_NAME-trigger" \
     --project="$PROJECT" --location="$REGION" --quiet 2>/dev/null || true
-
-  FUNCTION_URL=$(gcloud functions describe "$FUNCTION_NAME" \
-    --gen2 --project="$PROJECT" --region="$REGION" \
-    --format='value(serviceConfig.uri)')
 
   gcloud eventarc triggers create "$FUNCTION_NAME-trigger" \
     --project="$PROJECT" \

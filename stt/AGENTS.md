@@ -118,9 +118,10 @@ Environment variables on the Cloud Function:
 | Variable | Default | Description |
 |---|---|---|
 | `GCP_PROJECT` | `sabeti-mgmt` | GCP project ID |
-| `STT_MODEL` | `chirp_3` | Speech-to-Text model |
-| `STT_REGION` | `us-central1` | Region for STT and Vertex AI |
-| `SUMMARY_MODEL` | `gemini-2.0-flash` | Vertex AI model for summaries |
+| `STT_MODEL` | `chirp_2` | Speech-to-Text model (`chirp_2` recommended; `chirp_3` limited to 20 min audio) |
+| `STT_REGION` | `us-central1` | Region for STT API endpoint |
+| `SUMMARY_MODEL` | `gemini-2.5-flash` | Vertex AI model for summaries (via `google-genai` SDK) |
+| `VERTEX_REGION` | `us-central1` | Region for Vertex AI Gemini API |
 
 ## Customizing Summary Instructions
 
@@ -185,6 +186,6 @@ gcloud functions logs read stt-transcribe --gen2 --project=sabeti-mgmt --region=
 ## Known Limitations
 
 - **60-minute function timeout:** Recordings longer than ~2 hours may time out during transcription
+- **Chirp 2 — no speaker diarization:** The default model (`chirp_2`) does not support speaker labels. Chirp 3 supports diarization but is limited to audio files under 20 minutes.
 - **English only** by default (configurable in code via `language_codes`)
 - **Max 3 concurrent function instances** to avoid STT API quota issues
-- **Speaker diarization** limited to 2-10 speakers
