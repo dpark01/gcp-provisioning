@@ -207,6 +207,15 @@ if run_step "function"; then
     --event-filters="bucket=$BUCKET" \
     --service-account="$SA_EMAIL"
 
+  # Eventarc creates a Pub/Sub subscription with 10s ack deadline by default.
+  # For long-running STT jobs, increase to 600s (max) to prevent redelivery.
+  echo "==> Updating Pub/Sub ack deadline..."
+  TRIGGER_SUB=$(gcloud eventarc triggers describe "$FUNCTION_NAME-trigger" \
+    --project="$PROJECT" --location="$REGION" \
+    --format='value(transport.pubsub.subscription)' | sed 's|.*/||')
+  gcloud pubsub subscriptions update "$TRIGGER_SUB" \
+    --ack-deadline=600 --project="$PROJECT"
+
   echo "    Done."
 fi
 

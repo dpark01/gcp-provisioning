@@ -105,6 +105,7 @@ gcloud storage cat gs://sabeti-transcription/speech-to-text/yourname/recording.s
 | MP3 | `audio/mpeg`, `audio/mp3` |
 | WAV | `audio/wav`, `audio/x-wav` |
 | FLAC | `audio/flac`, `audio/x-flac` |
+| M4A | `audio/m4a`, `audio/x-m4a` |
 | MP4 Audio | `audio/mp4` |
 | MP4 Video | `video/mp4` |
 | OGG | `audio/ogg` |

@@ -37,6 +37,8 @@ SUPPORTED_MIME_TYPES = {
     "audio/flac",
     "audio/x-flac",
     "audio/mp4",
+    "audio/m4a",
+    "audio/x-m4a",
     "audio/ogg",
     "video/mp4",
     "audio/webm",
@@ -202,7 +204,7 @@ def transcribe_audio(request):
         recognizer = f"projects/{PROJECT_ID}/locations/{STT_REGION}/recognizers/_"
 
         config = speech_v2.RecognitionConfig(
-            auto_decoding_config=speech_v2.AutoDecodingConfig(),
+            auto_decoding_config=speech_v2.AutoDetectDecodingConfig(),
             model=STT_MODEL,
             language_codes=["en-US"],
             features=speech_v2.RecognitionFeatures(
