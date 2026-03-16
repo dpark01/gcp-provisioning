@@ -17,18 +17,18 @@ Eventarc trigger fires on object.finalized for the bucket
          |
 Cloud Function (2nd gen, HTTP-triggered, Python 3.12) receives CloudEvent
          |
-Validates: path starts with speech-to-text/, audio MIME type
+Validates: path starts with speech-to-text/, audio/video MIME type
          |
-Submits async Speech-to-Text v2 (Chirp 3) batch recognize job
-         |
-Polls for completion within function (up to 55 min)
+Transcribes audio (default: Gemini 3.1 Pro multimodal)
+  - Gemini models: single API call with speaker diarization + named speakers
+  - Cloud STT models (chirp_2/chirp_3): async batch job with polling
          |
 Writes transcript alongside input: {subfolder}/{filename}.txt
-  (with timestamps + speaker labels: "[00:01:23] Speaker 1: ...")
+  (with timestamps + speaker labels: "[00:01:23] Pardis: ...")
          |
 Reads SUMMARY_INSTRUCTIONS.md (subfolder override > root default)
          |
-Calls Vertex AI Gemini to generate structured summary
+Calls Vertex AI Gemini Flash to generate structured summary
          |
 Writes summary alongside input: {subfolder}/{filename}.summary.md
          |
@@ -42,6 +42,20 @@ which is too short for long audio transcriptions. The function is deployed as
 HTTP-triggered (supports 3600s) with a separate Eventarc trigger that routes GCS
 `object.finalized` events to the function's HTTP endpoint.
 
+## Transcription Backends
+
+The `STT_MODEL` env var selects the transcription backend:
+
+| Model | Backend | Speaker Labels | Max Audio | Notes |
+|---|---|---|---|---|
+| `gemini-3.1-pro-preview` | Gemini multimodal | Yes (named) | ~9.5 hrs | **Default.** Identifies speakers by name from context |
+| `gemini-2.5-pro` | Gemini multimodal | Yes (named) | ~9.5 hrs | Stable alternative |
+| `chirp_2` | Cloud STT v2 | No | Hours | Fallback for long audio |
+| `chirp_3` | Cloud STT v2 | Yes (Speaker 1/2/...) | 20 min | Limited audio length |
+
+Gemini models use `location='global'` on Vertex AI. Cloud STT models use the regional
+endpoint configured via `STT_REGION`.
+
 ## GCP Services
 
 | Service | Purpose |
@@ -49,8 +63,8 @@ HTTP-triggered (supports 3600s) with a separate Eventarc trigger that routes GCS
 | Cloud Storage | File drop zone, transcript/summary output |
 | Eventarc | Routes GCS events to Cloud Function via HTTP |
 | Cloud Functions (2nd gen) | HTTP-triggered, runs transcription and summary logic |
-| Speech-to-Text v2 | Transcription via Chirp 3 model |
-| Vertex AI (Gemini) | LLM summary generation |
+| Vertex AI (Gemini) | Transcription (multimodal) and summary generation |
+| Speech-to-Text v2 | Alternative transcription backend (chirp_2/chirp_3) |
 | Cloud Build | Builds and deploys the function |
 
 ## Bucket Layout
@@ -85,7 +99,7 @@ gcloud storage cp recording.mp3 gs://sabeti-transcription/speech-to-text/yournam
 # Upload to root
 gcloud storage cp recording.mp3 gs://sabeti-transcription/speech-to-text/
 
-# Check results (wait a few minutes for short recordings)
+# Check results (wait ~8 minutes for a 1-hour recording)
 gcloud storage ls gs://sabeti-transcription/speech-to-text/yourname/
 gcloud storage cat gs://sabeti-transcription/speech-to-text/yourname/recording.txt
 gcloud storage cat gs://sabeti-transcription/speech-to-text/yourname/recording.summary.md
@@ -118,10 +132,10 @@ Environment variables on the Cloud Function:
 | Variable | Default | Description |
 |---|---|---|
 | `GCP_PROJECT` | `sabeti-mgmt` | GCP project ID |
-| `STT_MODEL` | `chirp_2` | Speech-to-Text model (`chirp_2` recommended; `chirp_3` limited to 20 min audio) |
-| `STT_REGION` | `us-central1` | Region for STT API endpoint |
+| `STT_MODEL` | `gemini-3.1-pro-preview` | Transcription model (see Transcription Backends table) |
+| `STT_REGION` | `us-central1` | Region for Cloud STT endpoint (ignored for Gemini models) |
 | `SUMMARY_MODEL` | `gemini-2.5-flash` | Vertex AI model for summaries (via `google-genai` SDK) |
-| `VERTEX_REGION` | `us-central1` | Region for Vertex AI Gemini API |
+| `VERTEX_REGION` | `us-central1` | Region for Vertex AI summary API |
 
 ## Customizing Summary Instructions
 
@@ -142,12 +156,12 @@ gcloud storage cp my-custom-instructions.md \
 
 | Component | Cost per hour of audio |
 |---|---|
-| Speech-to-Text v2 (Chirp 3) | ~$1.44 |
-| Vertex AI Gemini Flash (summary) | ~$0.01 |
+| Gemini 3.1 Pro (transcription) | ~$0.40 |
+| Gemini 2.5 Flash (summary) | ~$0.01 |
 | Cloud Functions compute | Negligible |
 | Cloud Storage | Negligible |
 
-First 60 minutes of STT per month are free.
+Alternative: Cloud STT v2 (Chirp 2) costs ~$1.44/hr (first 60 min/month free).
 
 ## Troubleshooting
 
@@ -185,7 +199,8 @@ gcloud functions logs read stt-transcribe --gen2 --project=sabeti-mgmt --region=
 
 ## Known Limitations
 
-- **60-minute function timeout:** Recordings longer than ~2 hours may time out during transcription
-- **Chirp 2 — no speaker diarization:** The default model (`chirp_2`) does not support speaker labels. Chirp 3 supports diarization but is limited to audio files under 20 minutes.
-- **English only** by default (configurable in code via `language_codes`)
-- **Max 3 concurrent function instances** to avoid STT API quota issues
+- **60-minute function timeout:** Very long recordings (>2 hours) may time out
+- **Gemini timestamp accuracy:** Timestamps from Gemini models are approximate (not frame-accurate like dedicated STT)
+- **English only** by default (Gemini handles multilingual automatically; Cloud STT configurable via `language_codes`)
+- **Max 3 concurrent function instances** to avoid API quota issues
+- **Gemini preview models:** `gemini-3.1-pro-preview` requires `location='global'` and may change with model updates

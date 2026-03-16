@@ -2,10 +2,15 @@
 
 Triggered by Eventarc on object.finalized in the sabeti-transcription bucket.
 Processes audio files under speech-to-text/ prefix:
-  1. Transcribes via Speech-to-Text v2 (Chirp 2) with timestamps
+  1. Transcribes audio (via Cloud STT or Gemini multimodal) with timestamps
   2. Writes timestamped transcript as .txt alongside input
   3. Generates LLM summary via Vertex AI Gemini, writes as .summary.md
   4. Deletes original audio file on success
+
+STT_MODEL options:
+  - chirp_2: Cloud STT v2, no speaker diarization, handles long audio
+  - chirp_3: Cloud STT v2 with diarization, limited to 20 min audio
+  - gemini-*: Gemini multimodal transcription with speaker diarization
 """
 
 import os
@@ -65,6 +70,123 @@ def build_transcript(result):
                 lines.append(f"{timestamp} {text}")
 
     return "\n".join(lines)
+
+
+TRANSCRIPTION_PROMPT = """\
+Transcribe this audio recording verbatim with timestamps and speaker labels.
+
+Rules:
+- Label each speaker consistently (Speaker 1, Speaker 2, etc.). If you can \
+identify a speaker's name from context (e.g. someone says "Thanks, Sarah"), \
+use their name for all subsequent lines.
+- Add timestamps in [HH:MM:SS] format at the start of each speaker turn or \
+every 30-60 seconds within long turns.
+- Remove filler words (um, uh, like, you know) and false starts.
+- Preserve technical terms, names, and acronyms exactly as spoken.
+- Do NOT summarize or paraphrase — transcribe what was said.
+- Do NOT add any preamble, commentary, or explanation — output only the transcript.
+
+Output format (one line per segment):
+[00:01:23] Speaker 1: Good morning everyone, let's get started.
+[00:01:30] Speaker 2: Thanks for setting this up.
+"""
+
+# Map common GCS content types to Gemini-compatible MIME types.
+# Gemini accepts: audio/wav, audio/mp3, audio/flac, audio/aiff, audio/aac, audio/ogg
+GEMINI_MIME_MAP = {
+    "audio/mpeg": "audio/mp3",
+    "audio/mp4": "audio/mp3",
+    "audio/mp4a-latm": "audio/mp3",
+    "audio/x-wav": "audio/wav",
+    "audio/x-flac": "audio/flac",
+    "audio/m4a": "audio/mp3",
+    "audio/x-m4a": "audio/mp3",
+    "audio/webm": "audio/ogg",
+    "video/mp4": "audio/mp3",
+    "video/webm": "audio/ogg",
+}
+
+
+def transcribe_with_cloud_stt(gcs_uri):
+    """Transcribe audio using Cloud Speech-to-Text v2 (chirp_2/chirp_3)."""
+    if STT_REGION == "global":
+        speech_client = speech_v2.SpeechClient()
+    else:
+        api_endpoint = f"{STT_REGION}-speech.googleapis.com"
+        speech_client = speech_v2.SpeechClient(
+            client_options=ClientOptions(api_endpoint=api_endpoint)
+        )
+    print(f"  STT region: {STT_REGION}")
+
+    recognizer = f"projects/{PROJECT_ID}/locations/{STT_REGION}/recognizers/_"
+
+    features_kwargs = {
+        "enable_automatic_punctuation": True,
+        "enable_word_time_offsets": True,
+    }
+    # Speaker diarization via BatchRecognize:
+    # - chirp_3: empty SpeakerDiarizationConfig() (but limited to 20 min audio)
+    # - chirp_2: not supported (diarization only available on chirp_3)
+    if STT_MODEL in ("chirp_3",):
+        features_kwargs["diarization_config"] = speech_v2.SpeakerDiarizationConfig()
+
+    config = speech_v2.RecognitionConfig(
+        auto_decoding_config=speech_v2.AutoDetectDecodingConfig(),
+        model=STT_MODEL,
+        language_codes=["en-US"],
+        features=speech_v2.RecognitionFeatures(**features_kwargs),
+    )
+
+    request = speech_v2.BatchRecognizeRequest(
+        recognizer=recognizer,
+        config=config,
+        files=[speech_v2.BatchRecognizeFileMetadata(uri=gcs_uri)],
+        recognition_output_config=speech_v2.RecognitionOutputConfig(
+            inline_response_config=speech_v2.InlineOutputConfig(),
+        ),
+    )
+
+    operation = speech_client.batch_recognize(request=request)
+    print(f"  STT job submitted: {operation.operation.name}")
+
+    elapsed = 0
+    while not operation.done():
+        if elapsed >= MAX_WAIT_SECONDS:
+            raise TimeoutError(f"STT job timed out after {elapsed}s")
+        time.sleep(POLL_INTERVAL_SECONDS)
+        elapsed += POLL_INTERVAL_SECONDS
+        print(f"  Waiting for STT job... {elapsed}s elapsed")
+
+    result = operation.result()
+
+    # Check for per-file errors in the batch result
+    for uri, file_result in result.results.items():
+        if file_result.error and file_result.error.code:
+            raise ValueError(
+                f"STT error for {uri}: {file_result.error.message}"
+            )
+
+    return build_transcript(result)
+
+
+def transcribe_with_gemini(gcs_uri, content_type):
+    """Transcribe audio using Gemini multimodal (speaker diarization included)."""
+    from google import genai
+    from google.genai import types
+
+    # Map to a MIME type Gemini accepts
+    mime_type = GEMINI_MIME_MAP.get(content_type, content_type)
+
+    # Gemini preview models require location='global' on Vertex AI
+    client = genai.Client(vertexai=True, project=PROJECT_ID, location="global")
+    response = client.models.generate_content(
+        model=STT_MODEL,
+        contents=[
+            types.Part.from_uri(file_uri=gcs_uri, mime_type=mime_type),
+            TRANSCRIPTION_PROMPT,
+        ],
+    )
+    return response.text
 
 
 def read_instructions(storage_client, bucket_name, subfolder):
@@ -182,70 +304,18 @@ def transcribe_audio(request):
 
     try:
         # --- Phase A: Transcription ---
-        # Regional models need a regional endpoint; global uses the default
-        if STT_REGION == "global":
-            speech_client = speech_v2.SpeechClient()
-        else:
-            api_endpoint = f"{STT_REGION}-speech.googleapis.com"
-            speech_client = speech_v2.SpeechClient(
-                client_options=ClientOptions(api_endpoint=api_endpoint)
-            )
-        print(f"Using STT region: {STT_REGION}, model: {STT_MODEL}")
         gcs_uri = f"gs://{bucket_name}/{object_name}"
+        print(f"Using model: {STT_MODEL}")
 
-        recognizer = f"projects/{PROJECT_ID}/locations/{STT_REGION}/recognizers/_"
-
-        features_kwargs = {
-            "enable_automatic_punctuation": True,
-            "enable_word_time_offsets": True,
-        }
-        # Speaker diarization via BatchRecognize:
-        # - chirp_3: empty SpeakerDiarizationConfig() (but limited to 20 min audio)
-        # - chirp_2: not supported (diarization only available on chirp_3)
-        if STT_MODEL in ("chirp_3",):
-            features_kwargs["diarization_config"] = speech_v2.SpeakerDiarizationConfig()
-
-        config = speech_v2.RecognitionConfig(
-            auto_decoding_config=speech_v2.AutoDetectDecodingConfig(),
-            model=STT_MODEL,
-            language_codes=["en-US"],
-            features=speech_v2.RecognitionFeatures(**features_kwargs),
-        )
-
-        request = speech_v2.BatchRecognizeRequest(
-            recognizer=recognizer,
-            config=config,
-            files=[speech_v2.BatchRecognizeFileMetadata(uri=gcs_uri)],
-            recognition_output_config=speech_v2.RecognitionOutputConfig(
-                inline_response_config=speech_v2.InlineOutputConfig(),
-            ),
-        )
-
-        operation = speech_client.batch_recognize(request=request)
-        print(f"STT job submitted: {operation.operation.name}")
-
-        # Poll for completion
-        elapsed = 0
-        while not operation.done():
-            if elapsed >= MAX_WAIT_SECONDS:
-                raise TimeoutError(f"STT job timed out after {elapsed}s")
-            time.sleep(POLL_INTERVAL_SECONDS)
-            elapsed += POLL_INTERVAL_SECONDS
-            print(f"Waiting for STT job... {elapsed}s elapsed")
-
-        result = operation.result()
-
-        # Check for per-file errors in the batch result
-        for uri, file_result in result.results.items():
-            if file_result.error and file_result.error.code:
-                raise ValueError(
-                    f"STT error for {uri}: {file_result.error.message}"
-                )
-
-        transcript_text = build_transcript(result)
+        if STT_MODEL.startswith("gemini-"):
+            # Gemini multimodal transcription — supports speaker diarization
+            transcript_text = transcribe_with_gemini(gcs_uri, content_type)
+        else:
+            # Cloud STT v2 (chirp_2, chirp_3, etc.)
+            transcript_text = transcribe_with_cloud_stt(gcs_uri)
 
         if not transcript_text.strip():
-            raise ValueError("STT returned empty transcript")
+            raise ValueError("Transcription returned empty result")
 
         # Write transcript
         transcript_blob = bucket.blob(transcript_path)

@@ -184,7 +184,7 @@ if run_step "function"; then
     --trigger-http \
     --no-allow-unauthenticated \
     --service-account="$SA_EMAIL" \
-    --set-env-vars="GCP_PROJECT=${PROJECT},STT_MODEL=chirp_2,STT_REGION=${REGION},SUMMARY_MODEL=gemini-2.5-flash,VERTEX_REGION=${REGION}" \
+    --set-env-vars="GCP_PROJECT=${PROJECT},STT_MODEL=gemini-3.1-pro-preview,STT_REGION=${REGION},SUMMARY_MODEL=gemini-2.5-flash,VERTEX_REGION=${REGION}" \
     --timeout=3600s \
     --memory=512Mi \
     --max-instances=3
