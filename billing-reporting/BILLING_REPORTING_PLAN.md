@@ -2,16 +2,22 @@
 
 ## Context
 
-We want generalized cost reporting for any GCP Billing Account at the Broad. Starting with three accounts as concrete examples, then generalizing.
+Generalized cost reporting across GCP Billing Accounts managed by the Sabeti Lab, spanning both Broad Institute and HHMI billing organizations.
 
-**Key discovery:** All Broad billing data already exists in the SADA master billing export (`broad-gcp-billing.gcp_billing_export_views.sada_billing_export_resource_v1_001AC2_2B914D_822931`), readable by all `@broadinstitute.org` users. 100+ billing accounts, millions of rows, dating back to April 2025. No new BQ exports needed.
+**Data source:** Direct GCP billing exports (partitioned, ~6h latency, ~15 GB/day scan). This replaced the previous SADA master billing export approach which scanned ~5.7 TB/day due to being unpartitioned. See "SADA Migration" section below.
 
-**Target billing accounts:**
-| Account ID | Display Name | 14d Spend | Notes |
+**Tracked billing accounts:**
+| Organization | Account ID | Display Name | Export Project |
 |---|---|---|---|
-| `011F41-0941F7-749F4B` | Broad Institute - 5008388 (SADA) | $12,859 | 11 projects, viral surveillance |
-| `0193CA-41033B-3FF267` | Broad Institute - 5008157 | $6,082 | ~80 projects, gcid-viral-seq heavy |
-| `00864F-515C74-8B1641` | Broad Institute - 5008152 | $1,519 | ~65 projects, malaria/bacterial/fungal |
+| Broad | `00864F-515C74-8B1641` | Broad Institute - 5008152 | gcid-data-core |
+| Broad | `011F41-0941F7-749F4B` | Broad Institute - 5008388 (SADA) | broad-hvp-dasc |
+| Broad | `0193CA-41033B-3FF267` | Broad Institute - 5008157 | gcid-viral-seq |
+| Broad | `01EA4B-6607E9-C37280` | Broad Institute - 5002079 (SADA) | gcid-viral-seq |
+| Broad | `01EABF-8D854B-B4B3D0` | Broad Institute - 6005589 (SADA) | sabeti-ai |
+| Broad | `013A53-04CB08-63E4C8` | Broad Institute - 6005319 (SADA) | dsi-resources |
+| Broad | `016D12-30A760-F5696D` | Broad Institute - 5001668 (SADA) | sabeti-txnomics |
+| Broad | `01E00D-6EA2B5-865FA0` | Broad Institute - 5008010 (SADA) | sabeti-dph-elc |
+| HHMI | `01EC6B-15AAB1-294340` | HHMI Sabeti - General (SADA) | sabeti-mgmt |
 
 **What works well for grouping:**
 - **Terra vs Non-Terra:** `project.id LIKE 'terra-%'` is clean and reliable
@@ -75,6 +81,60 @@ We want generalized cost reporting for any GCP Billing Account at the Broad. Sta
 
 **Scheduling:** Run `refresh-materialized-billing.sh` daily at 6 AM PT (captures overnight exports)
 
+## SADA Migration (2026-03-30)
+
+### Problem
+The SADA master billing export (`broad-gcp-billing...sada_billing_export_resource_v1_001AC2_2B914D_822931`)
+is an unpartitioned VIEW. Any query against it scans the full dataset (~5.7 TB) regardless of
+WHERE clauses, IN filters, or JOINs. At on-demand pricing ($6.25/TB), this cost ~$36/day for
+the daily scheduled refresh.
+
+Additionally, HHMI billing accounts are under a separate billing organization (master account
+`00D847-EE429B-D09EC7`) and do not appear in the Broad SADA export at all.
+
+### Solution
+Replaced SADA with direct GCP billing exports. Each billing account has its own partitioned
+export table in a project we control. The scheduled query now UNION ALLs these direct exports
+in a CTE, with the WHERE clause on `usage_start_time` benefiting from partitioning.
+
+**Result:** Daily scan reduced from **5.7 TB to ~15 GB** (383x reduction, ~$0.09/day).
+
+### Direct Export Table Locations
+
+| Billing Account | Export Table |
+|---|---|
+| `00864F-515C74-8B1641` | `gcid-data-core.billing_export.gcp_billing_export_resource_v1_00864F_515C74_8B1641` |
+| `011F41-0941F7-749F4B` | `broad-hvp-dasc.billing_export.gcp_billing_export_resource_v1_011F41_0941F7_749F4B` |
+| `0193CA-41033B-3FF267` | `gcid-viral-seq.billing_export.gcp_billing_export_resource_v1_0193CA_41033B_3FF267` |
+| `01EA4B-6607E9-C37280` | `gcid-viral-seq.billing_export.gcp_billing_export_resource_v1_01EA4B_6607E9_C37280` |
+| `01EABF-8D854B-B4B3D0` | `sabeti-ai.billing_export.gcp_billing_export_resource_v1_01EABF_8D854B_B4B3D0` |
+| `013A53-04CB08-63E4C8` | `dsi-resources.billing_export.gcp_billing_export_resource_v1_013A53_04CB08_63E4C8` |
+| `016D12-30A760-F5696D` | `sabeti-txnomics.billing_export.gcp_billing_export_resource_v1_016D12_30A760_F5696D` |
+| `01E00D-6EA2B5-865FA0` | `sabeti-dph-elc.billing_export.gcp_billing_export_resource_v1_01E00D_6EA2B5_865FA0` |
+| `01EC6B-15AAB1-294340` | `sabeti-mgmt.billing_export.gcp_billing_export_resource_v1_01EC6B_15AAB1_294340` |
+
+### Accounts Not Migrated
+
+Several accounts that appeared in SADA are not tracked via direct exports. These were either
+dormant ($0 in last 30 days) or low-spend accounts without a clear hosting project:
+
+- 6005589 (u19), 4500115, 6005589 (pyroviral), 6005589 (Sabeti), 8201048 (viral Seq),
+  6005589 (adapt), 5008321, 6005589, 6005315, 5008012, 4500115 (1), 5008151
+
+These can be added later by running `setup-billing-export.sh` on a suitable project,
+configuring the export in Cloud Console, and adding a UNION ALL leg to
+`scheduled-billing-refresh.sql`.
+
+### Adding a New Billing Account
+
+1. Run `./vertex-ai/setup-billing-export.sh <project>` to create the `billing_export` dataset
+2. Configure the billing export in Cloud Console (Billing > Billing export > Detailed usage cost)
+3. Wait ~24h for backfill (or create an empty table with matching schema for immediate reference)
+4. Add a `UNION ALL` leg to the `raw_exports` CTE in `scheduled-billing-refresh.sql`
+5. Update `refresh-materialized-billing.sh` with the same addition
+6. Run `./billing-reporting/refresh-billing-account-names.sh` to ensure the account name is mapped
+7. Update the BQ scheduled query in Console with the new SQL
+
 ## Files Created
 
 | File | Description |
@@ -82,16 +142,17 @@ We want generalized cost reporting for any GCP Billing Account at the Broad. Sta
 | `billing-reporting/refresh-billing-account-names.sh` | Refresh BQ mapping table from `gcloud billing accounts list` |
 | `billing-reporting/create-summary-view.sql` | Original view definition (deprecated) |
 | `billing-reporting/create-materialized-billing-table.sql` | DDL for partitioned billing_data table |
-| `billing-reporting/refresh-materialized-billing.sh` | Script to refresh 90-day rolling window |
+| `billing-reporting/refresh-materialized-billing.sh` | Script to refresh 90-day rolling window from direct exports |
 | `billing-reporting/create-summary-view-v2.sql` | View over materialized table (for Looker) |
-| `billing-reporting/scheduled-billing-refresh.sql` | BQ Scheduled Query (runs daily 0900 UTC) |
+| `billing-reporting/scheduled-billing-refresh.sql` | BQ Scheduled Query (runs daily 0900 UTC, uses direct exports) |
+| `billing-reporting/HHMI_INTEGRATION_PLAN.md` | HHMI billing account integration plan and status |
 
 ## BQ Objects Created
 
 | Object | Type | Notes |
 |---|---|---|
-| `billing_account_names` | TABLE (20 rows) | Display names from `gcloud billing accounts list` |
-| `billing_data` | TABLE (partitioned) | 90-day rolling window, 1.1B rows, refreshed daily |
+| `billing_account_names` | TABLE (22 rows) | Display names from `gcloud billing accounts list` (Broad + HHMI) |
+| `billing_data` | TABLE (partitioned) | 90-day rolling window from direct exports, refreshed daily |
 | `billing_account_summary_v2` | VIEW | Points to billing_data, use for Looker Studio |
 
 Dataset: `gcid-data-core.custom_sada_billing_views`
@@ -113,8 +174,9 @@ GROUP BY 1, 2
 ### 3. Set up daily refresh schedule -- DONE
 Created BQ Scheduled Query "Daily Billing Data Refresh" running at 0900 UTC daily.
 - SQL: `billing-reporting/scheduled-billing-refresh.sql`
-- Uses `CREATE OR REPLACE TABLE` (single-statement, no shell script needed)
+- Uses `CREATE OR REPLACE TABLE` with CTE-based UNION ALL of direct billing exports
 - View in Console: BigQuery > Scheduled Queries > "Daily Billing Data Refresh"
+- **Updated 2026-03-30**: Migrated from SADA master export to direct exports (5.7 TB → 15 GB/day)
 
 ### 4. Complete Looker Studio dashboard
 - Point data source at `billing_account_summary_v2` (or directly at `billing_data`)

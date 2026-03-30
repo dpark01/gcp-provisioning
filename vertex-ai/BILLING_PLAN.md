@@ -8,7 +8,7 @@ Two usage patterns for tracking Claude Code (Vertex AI) costs:
 
 2. **Shared projects**: Multiple users share a project (currently `gcid-data-core`, extensible to future projects). Audit logs provide per-user attribution via proportional cost splitting.
 
-**Goal**: Create a unified Looker dashboard showing per-user Claude Code costs across both patterns, with per-model granularity, supporting multiple billing accounts.
+**Goal**: Create a unified Looker dashboard showing per-user Claude Code costs across both patterns, with per-model granularity, supporting multiple billing accounts across both Broad Institute and HHMI billing organizations.
 
 ## Architecture
 
@@ -18,6 +18,7 @@ Two usage patterns for tracking Claude Code (Vertex AI) costs:
 ├─────────────────────────────────────────────────────────────────────┤
 │  Direct GCP Billing Exports (~6h latency, partitioned)              │
 │                                                                     │
+│  Broad Institute:                                                  │
 │  gcid-data-core.billing_export   (00864F-515C74-8B1641)            │
 │  broad-hvp-dasc.billing_export   (011F41-0941F7-749F4B)            │
 │  gcid-viral-seq.billing_export   (0193CA-41033B-3FF267)            │
@@ -25,7 +26,10 @@ Two usage patterns for tracking Claude Code (Vertex AI) costs:
 │  sabeti-ai.billing_export        (01EABF-8D854B-B4B3D0)            │
 │  dsi-resources.billing_export    (013A53-04CB08-63E4C8)            │
 │                                                                     │
-│  + SADA billing_data for historical dates before cutoff             │
+│  HHMI:                                                              │
+│  sabeti-mgmt.billing_export      (01EC6B-15AAB1-294340)            │
+│                                                                     │
+│                                                                     │
 └────────────────────────┬────────────────────────────────────────────┘
                          │
                          ▼
@@ -34,7 +38,7 @@ Two usage patterns for tracking Claude Code (Vertex AI) costs:
         │    (UNION ALL view, Vertex AI only)         │
         │    Normalizes schema across exports         │
         │    Joins billing_account_names              │
-        │    Historical cutoff: SADA before / direct  │
+        │    Filtered to Claude% / Vertex AI services  │
         │    exports on+after transition date         │
         └────────────────────┬───────────────────────┘
                              │
@@ -88,15 +92,16 @@ Two usage patterns for tracking Claude Code (Vertex AI) costs:
 
 ## Billing Accounts
 
-| Cost Object | Billing Account ID | Export Project | Dataset | Status |
-|---|---|---|---|---|
-| 5008152 | `00864F-515C74-8B1641` | gcid-data-core | billing_export | Live |
-| 5008388 | `011F41-0941F7-749F4B` | broad-hvp-dasc | billing_export | Live |
-| 5008157 | `0193CA-41033B-3FF267` | gcid-viral-seq | billing_export | Live |
-| 5002079 | `01EA4B-6607E9-C37280` | gcid-viral-seq | billing_export | Export configured, pending backfill |
-| 6005589 | `01EABF-8D854B-B4B3D0` | sabeti-ai | billing_export | Live (no usage — new account) |
-| 6005319 | `013A53-04CB08-63E4C8` | dsi-resources | billing_export | Live |
-| 4500115 | `01B753-07D3AF-8A7587` | sabeti-encode | billing_export | Export configured, pending backfill |
+| Organization | Cost Object | Billing Account ID | Export Project | Dataset | Status |
+|---|---|---|---|---|---|
+| Broad | 5008152 | `00864F-515C74-8B1641` | gcid-data-core | billing_export | Live |
+| Broad | 5008388 | `011F41-0941F7-749F4B` | broad-hvp-dasc | billing_export | Live |
+| Broad | 5008157 | `0193CA-41033B-3FF267` | gcid-viral-seq | billing_export | Live |
+| Broad | 5002079 | `01EA4B-6607E9-C37280` | gcid-viral-seq | billing_export | Export configured, pending backfill |
+| Broad | 6005589 | `01EABF-8D854B-B4B3D0` | sabeti-ai | billing_export | Live (no usage — new account) |
+| Broad | 6005319 | `013A53-04CB08-63E4C8` | dsi-resources | billing_export | Live |
+| Broad | 4500115 | `01B753-07D3AF-8A7587` | sabeti-encode | billing_export | Export configured, pending backfill |
+| HHMI | HHMI General | `01EC6B-15AAB1-294340` | sabeti-mgmt | billing_export | Export configured, pending backfill |
 
 Export table naming convention: `gcp_billing_export_resource_v1_<ACCT_ID_WITH_UNDERSCORES>`
 
@@ -105,27 +110,33 @@ workloads (Colab Enterprise, A100 GPU training), not Claude model usage. The bil
 is set up for completeness, but `sabeti-encode` is not in the `claude_code_projects` mapping
 table and does not appear in the Claude Code dashboard.
 
+**Note on HHMI accounts**: HHMI billing accounts are under a separate GCP billing organization
+(master account `00D847-EE429B-D09EC7`) from Broad (`001AC2-2B914D-822931`). They do not appear
+in the Broad SADA master billing export. HHMI does not use Broad-style numeric cost objects;
+the Looker `cost_object` calculated field falls back to the full `billing_account_name` for
+these accounts. The "HHMI Sabeti - Human" account (`011947-176014-D8E363`) exists but all
+projects have been moved to "HHMI Sabeti - General" and is not actively tracked.
+
 ## Data Freshness
 
 - **Direct billing exports**: ~2-4 hour latency in practice (partitioned, ~2 MB per query)
-- **SADA billing_data**: ~36 hour latency (used for historical data before transition cutoff only)
 - **Audit logs**: Near real-time (~5 minutes)
 
-The `claude_vertex_ai_billing` view uses a hardcoded date cutoff (`2026-02-15`) to split between SADA (historical) and direct exports (current). After 90+ days, the SADA portion naturally becomes empty as partitions expire.
+The `claude_vertex_ai_billing` view reads directly from partitioned billing exports. Historical data goes back as far as each export table contains (varies by account). The general billing pipeline (`billing_data`) was also fully migrated to direct exports on 2026-03-30.
 
 ## Service Description in Direct Exports
 
 **Important**: In raw detailed billing exports, Claude models appear as their own top-level
 service descriptions (e.g., `Claude Opus 4.6`, `Claude Sonnet 4.5`) rather than under
-`Vertex AI`. SADA normalizes these to `service_category = 'Vertex AI'`, but the direct
-export portions of `claude_vertex_ai_billing` filter on `service.description LIKE 'Claude%'`.
+`Vertex AI`. The `claude_vertex_ai_billing` view filters on
+`service.description LIKE 'Claude%' OR service.description = 'Vertex AI'`.
 
 ## Existing Infrastructure
 
 **Already in place:**
-- Direct billing exports → per-account tables in `billing_export` datasets (~2-4h latency, 6 billing accounts)
+- Direct billing exports → per-account tables in `billing_export` datasets (~2-4h latency, 8 Broad + 1 HHMI billing accounts)
 - `claude_vertex_ai_billing` → UNION ALL view across direct exports, filtered to `Claude%` services
-- SADA billing export → `custom_sada_billing_views.billing_data` (materialized, partitioned, 90-day rolling window, refreshed daily — used for historical data only)
+- `billing_data` → materialized, partitioned, 90-day rolling window from direct exports (refreshed daily at 0900 UTC, ~15 GB scan). SADA fully removed as of 2026-03-30.
 - Audit logs → `billing_export.cloudaudit_googleapis_com_data_access_*` (gcid-data-core only, currently)
 - Older views → `billing_export.claude_usage_detailed`, `claude_cost_per_user` (superseded)
 
@@ -232,7 +243,7 @@ Two views:
 
 **File: `vertex-ai/create-billing-union-view.sql`**
 
-View `claude_vertex_ai_billing` that UNION ALLs direct billing exports across all 5 billing accounts, filtered to Vertex AI. Includes a historical cutoff date: dates before the cutoff read from SADA `billing_data`, dates on or after read from direct exports. Joins `billing_account_names` for display names. Includes `export_time` for freshness monitoring.
+View `claude_vertex_ai_billing` that UNION ALLs direct billing exports across all billing accounts (7 Broad + 1 HHMI) in a CTE, filtered to Claude/Vertex AI services. Joins `billing_account_names` for display names. Includes `export_time` for freshness monitoring.
 
 ### Step 3: Unified per-user cost view
 
@@ -270,7 +281,7 @@ Data source: `claude_code_user_costs`
 | `cost_object` | `IFNULL(REGEXP_EXTRACT(billing_account_name, "- (\\d+)"), billing_account_name)` |
 | `user_name` | `IFNULL(REGEXP_EXTRACT(user_email, "^([^@]+)"), user_email)` |
 
-`cost_object` extracts the numeric cost object ID from `billing_account_name` (e.g., `"Broad Institute - 5008388 (SADA)"` → `"5008388"`). Works whether or not the `(SADA)` suffix is present.
+`cost_object` extracts the numeric cost object ID from `billing_account_name` (e.g., `"Broad Institute - 5008388 (SADA)"` → `"5008388"`). Works whether or not the `(SADA)` suffix is present. For non-Broad accounts (e.g., HHMI) that lack a numeric cost object, the IFNULL falls back to the full `billing_account_name`. This can be refined later with a CASE expression to map HHMI accounts to friendlier labels like `"HHMI General"`.
 
 `user_name` extracts the local part of the email address (e.g., `"dpark@broadinstitute.org"` → `"dpark"`).
 
@@ -327,6 +338,15 @@ If the project uses a billing account not yet in the union view, also add it:
 3. Wait for backfill, then add the table to `create-billing-union-view.sql` and re-run
 
 Audit logs route via the sink to the central wildcard table.
+
+### HHMI-specific notes
+
+HHMI billing accounts are under a separate GCP billing organization and do not appear in the
+Broad SADA master export. Direct billing exports are the only data source for HHMI accounts.
+When adding a new HHMI project:
+- The direct export must be configured under a project the admin has access to (currently `sabeti-mgmt`)
+- Run `./billing-reporting/refresh-billing-account-names.sh` to ensure the HHMI account name is in the mapping table
+- HHMI accounts use the full `billing_account_name` as their cost object in Looker (no numeric cost object ID)
 
 ## Verification
 

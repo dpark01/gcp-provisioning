@@ -56,7 +56,9 @@ Key columns:
 
 ## Data Freshness
 
-The SADA billing export lags ~24h. The evaluation SQL excludes the most recent 1 day to avoid incomplete data. A 7-day window evaluated on Feb 16 covers Feb 8-14.
+The `billing_data` table is refreshed daily at 0900 UTC from direct GCP billing exports (~6h latency). The evaluation SQL excludes the most recent 1 day to avoid incomplete data. A 7-day window evaluated on Feb 16 covers Feb 8-14.
+
+The system supports both Broad Institute and HHMI billing accounts. HHMI accounts are under a separate billing organization but are included in `billing_data` via the same direct export pipeline.
 
 ## Scope Filtering
 

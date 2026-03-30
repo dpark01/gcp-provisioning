@@ -50,11 +50,14 @@ else
     echo ""
     echo "Creates a billing_export dataset and prints setup instructions."
     echo ""
-    echo "Projects needing setup:"
+    echo "Projects needing setup (Broad Institute):"
     echo "  broad-hvp-dasc   (billing account 011F41-0941F7-749F4B)"
     echo "  gcid-viral-seq   (billing account 0193CA-41033B-3FF267, 01EA4B-6607E9-C37280)"
     echo "  sabeti-ai        (billing account 01EABF-8D854B-B4B3D0)"
     echo "  dsi-resources    (billing account 013A53-04CB08-63E4C8)"
+    echo ""
+    echo "Projects needing setup (HHMI):"
+    echo "  sabeti-mgmt      (billing account 01EC6B-15AAB1-294340)"
     exit 1
   fi
   TARGET_PROJECT="$1"

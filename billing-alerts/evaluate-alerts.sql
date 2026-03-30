@@ -55,7 +55,7 @@ alert_billing AS (
     a.cooldown_days,
     a.notify_emails,
     -- Build scope description from non-NULL scope columns
-    CONCAT_WS(', ',
+    ARRAY_TO_STRING(ARRAY<STRING>[
       IF(a.scope_billing_account_id IS NOT NULL,
          CONCAT('billing_account=', a.scope_billing_account_id), NULL),
       IF(a.scope_project_id IS NOT NULL,
@@ -66,7 +66,7 @@ alert_billing AS (
          CONCAT('team=', a.scope_team), NULL),
       IF(a.scope_service_category IS NOT NULL,
          CONCAT('service=', a.scope_service_category), NULL)
-    ) AS scope_description,
+    ], ', ') AS scope_description,
     b.usage_date,
     b.net_cost
   FROM active_alerts a
