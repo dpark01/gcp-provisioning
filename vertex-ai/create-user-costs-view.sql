@@ -26,7 +26,7 @@ WITH billing_with_model AS (
   SELECT
     b.*,
     CASE
-      -- 3.x models
+      -- Claude 3.x models
       WHEN LOWER(b.sku_description) LIKE '%3.5 sonnet%'
         OR LOWER(b.sku_description) LIKE '%3-5 sonnet%'
         OR LOWER(b.sku_description) LIKE '%3_5 sonnet%'      THEN 'sonnet-3.5'
@@ -35,7 +35,7 @@ WITH billing_with_model AS (
         OR LOWER(b.sku_description) LIKE '%3_5 haiku%'        THEN 'haiku-3.5'
       WHEN LOWER(b.sku_description) LIKE '%opus 3%'
         OR LOWER(b.sku_description) LIKE '%3 opus%'            THEN 'opus-3'
-      -- 4.x models: sub-versions BEFORE base version (first match wins)
+      -- Claude 4.x models: sub-versions BEFORE base version (first match wins)
       -- Google uses both dots (4.1, 4.5) and spaces (4 5, 4 6) inconsistently
       WHEN LOWER(b.sku_description) LIKE '%sonnet 4.6%'
         OR LOWER(b.sku_description) LIKE '%sonnet 4 6%'       THEN 'sonnet-4.6'
@@ -54,6 +54,12 @@ WITH billing_with_model AS (
         OR LOWER(b.sku_description) LIKE '%haiku 4 5%'         THEN 'haiku-4.5'
       WHEN LOWER(b.sku_description) LIKE '%haiku 4%'
         OR LOWER(b.sku_description) LIKE '%haiku-4%'            THEN 'haiku-4'
+      -- Gemini models
+      WHEN LOWER(b.sku_description) LIKE '%gemini 2.5 flash%'  THEN 'gemini-2.5-flash'
+      WHEN LOWER(b.sku_description) LIKE '%gemini 2.5 pro%'    THEN 'gemini-2.5-pro'
+      WHEN LOWER(b.sku_description) LIKE '%gemini 2.0 flash%'  THEN 'gemini-2.0-flash'
+      WHEN LOWER(b.sku_description) LIKE '%gemini 3.0 pro%'    THEN 'gemini-3.0-pro'
+      WHEN LOWER(b.sku_description) LIKE '%gemini 3.0 flash%'  THEN 'gemini-3.0-flash'
       -- Graceful fallback: raw SKU description instead of generic 'other'
       ELSE LOWER(b.sku_description)
     END AS model_family

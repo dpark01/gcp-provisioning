@@ -29,4 +29,8 @@ VALUES
   ('coding-lluebber', 'single_user', 'lluebber@broadinstitute.org'),
   ('coding-pvarilly', 'single_user', 'pvarilly@broadinstitute.org'),
   ('gcid-data-core',  'shared',      NULL),
-  ('sabeti-ai',       'shared',      NULL);
+  ('sabeti-ai',       'shared',      NULL),
+  ('sabeti-encode',   'shared',      NULL),
+  ('sabeti-mgmt',     'shared',      NULL),
+  ('viral-seq-ai',    'shared',      NULL),
+  ('cigass-ai',       'shared',      NULL);

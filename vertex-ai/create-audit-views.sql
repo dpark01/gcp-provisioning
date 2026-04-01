@@ -8,6 +8,10 @@
 -- For each new shared project, a log sink must route audit logs to this dataset
 -- (see setup-audit-sink.sh).
 --
+-- Captures all Vertex AI inference calls (Claude, Gemini, etc.), not just
+-- Anthropic models. Model family extraction handles both Claude and Gemini
+-- naming conventions.
+--
 -- Usage:
 --   bq query --nouse_legacy_sql --project_id=gcid-data-core < vertex-ai/create-audit-views.sql
 
@@ -23,13 +27,13 @@ WITH raw_logs AS (
     resource.labels.project_id AS project_id,
     REGEXP_EXTRACT(
       protopayload_auditlog.resourceName,
-      r'/models/(claude-[a-z0-9.-]+?)(?:@|$)'
+      r'/models/([a-z0-9.-]+?)(?:@|$)'
     ) AS model_name,
     DATE(timestamp) AS usage_date,
     timestamp
   FROM `gcid-data-core.billing_export.cloudaudit_googleapis_com_data_access_*`
   WHERE protopayload_auditlog.serviceName = 'aiplatform.googleapis.com'
-    AND protopayload_auditlog.resourceName LIKE '%anthropic%'
+    AND LOWER(protopayload_auditlog.methodName) LIKE '%predict%'
 )
 SELECT
   user_email,
@@ -39,14 +43,14 @@ SELECT
   -- Billing SKUs group by model family (e.g., "Claude 3.5 Sonnet"), not by snapshot.
   -- Update this CASE when Anthropic releases a new model family.
   CASE
-    -- 3.x models
+    -- Claude 3.x models
     WHEN model_name LIKE 'claude-3-5-sonnet%'
       OR model_name LIKE 'claude-3.5-sonnet%'     THEN 'sonnet-3.5'
     WHEN model_name LIKE 'claude-3-5-haiku%'
       OR model_name LIKE 'claude-3.5-haiku%'       THEN 'haiku-3.5'
     WHEN model_name LIKE 'claude-3-opus%'
       OR model_name LIKE 'claude-3.0-opus%'        THEN 'opus-3'
-    -- 4.x models: sub-versions BEFORE base version (first match wins)
+    -- Claude 4.x models: sub-versions BEFORE base version (first match wins)
     WHEN model_name LIKE 'claude-sonnet-4-6%'      THEN 'sonnet-4.6'
     WHEN model_name LIKE 'claude-sonnet-4-5%'      THEN 'sonnet-4.5'
     WHEN model_name LIKE 'claude-sonnet-4%'        THEN 'sonnet-4'
@@ -56,6 +60,12 @@ SELECT
     WHEN model_name LIKE 'claude-opus-4%'          THEN 'opus-4'
     WHEN model_name LIKE 'claude-haiku-4-5%'       THEN 'haiku-4.5'
     WHEN model_name LIKE 'claude-haiku-4%'         THEN 'haiku-4'
+    -- Gemini models: sub-versions BEFORE base version
+    WHEN model_name LIKE 'gemini-2.5-flash%'       THEN 'gemini-2.5-flash'
+    WHEN model_name LIKE 'gemini-2.5-pro%'         THEN 'gemini-2.5-pro'
+    WHEN model_name LIKE 'gemini-2.0-flash%'       THEN 'gemini-2.0-flash'
+    WHEN model_name LIKE 'gemini-3.0-pro%'         THEN 'gemini-3.0-pro'
+    WHEN model_name LIKE 'gemini-3.0-flash%'       THEN 'gemini-3.0-flash'
     -- Graceful fallback: raw model name instead of generic 'other'
     ELSE COALESCE(model_name, 'unknown')
   END AS model_family,

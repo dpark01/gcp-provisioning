@@ -111,7 +111,7 @@ gcloud logging sinks ${SINK_CMD} "${SINK_NAME}" \
   --project="${TARGET_PROJECT}" \
   --log-filter='resource.type="audited_resource"
     protoPayload.serviceName="aiplatform.googleapis.com"
-    protoPayload.resourceName:"anthropic"'
+    protoPayload.methodName:"predict"'
 
 echo "  Sink configured."
 echo ""

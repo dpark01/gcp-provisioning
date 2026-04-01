@@ -235,7 +235,7 @@ Billing account info (`billing_account_id`, `billing_account_name`) is derived f
 
 Two views:
 
-1. **`claude_code_audit_logs`** — CTE-based view extracting `user_email`, `project_id`, `model_name`, and derived `model_family` from audit log wildcard tables. Filters to `aiplatform.googleapis.com` + `anthropic` resources.
+1. **`claude_code_audit_logs`** — CTE-based view extracting `user_email`, `project_id`, `model_name`, and derived `model_family` from audit log wildcard tables. Filters to `aiplatform.googleapis.com` predict calls (Claude, Gemini, and other Vertex AI models).
 
 2. **`claude_code_daily_usage`** — Aggregation: `GROUP BY (usage_date, project_id, user_email, model_family)` producing `request_count`.
 
