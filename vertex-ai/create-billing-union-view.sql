@@ -72,7 +72,7 @@ SELECT
   DATE(usage_start_time) AS usage_date,
   project.id AS project_id,
   service.description AS service_name,
-  sku.description AS sku_description,
+  REGEXP_REPLACE(sku.description, r'(?i)^Cloud Vertex AI Model Garden Model as a Service ', '') AS sku_description,
   location.region AS region,
   cost,
   cost + IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c), 0) AS net_cost,
