@@ -67,7 +67,7 @@ WITH billing_with_model AS (
   -- Restrict to inference SKUs only, excluding storage and compute SKUs.
   -- NOTE: sku_description is already cleaned (token/region suffixes stripped
   -- in the billing union view), so we exclude non-inference rows by name.
-  WHERE NOT REGEXP_CONTAINS(b.sku_description, r'(?i)(storage|colab|grounding)')
+  WHERE NOT REGEXP_CONTAINS(b.sku_description, r'(?i)(storage|colab|grounding|training)')
 ),
 
 -- ============================================================================
