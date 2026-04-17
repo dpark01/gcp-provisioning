@@ -54,6 +54,7 @@ SELECT
     WHEN model_name LIKE 'claude-sonnet-4-6%'      THEN 'sonnet-4.6'
     WHEN model_name LIKE 'claude-sonnet-4-5%'      THEN 'sonnet-4.5'
     WHEN model_name LIKE 'claude-sonnet-4%'        THEN 'sonnet-4'
+    WHEN model_name LIKE 'claude-opus-4-7%'        THEN 'opus-4.7'
     WHEN model_name LIKE 'claude-opus-4-6%'        THEN 'opus-4.6'
     WHEN model_name LIKE 'claude-opus-4-5%'        THEN 'opus-4.5'
     WHEN model_name LIKE 'claude-opus-4-1%'        THEN 'opus-4.1'

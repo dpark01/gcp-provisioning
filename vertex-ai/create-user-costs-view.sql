@@ -43,6 +43,8 @@ WITH billing_with_model AS (
         OR LOWER(b.sku_description) LIKE '%sonnet 4 5%'       THEN 'sonnet-4.5'
       WHEN LOWER(b.sku_description) LIKE '%sonnet 4%'
         OR LOWER(b.sku_description) LIKE '%sonnet-4%'          THEN 'sonnet-4'
+      WHEN LOWER(b.sku_description) LIKE '%opus 4.7%'
+        OR LOWER(b.sku_description) LIKE '%opus 4 7%'          THEN 'opus-4.7'
       WHEN LOWER(b.sku_description) LIKE '%opus 4.6%'
         OR LOWER(b.sku_description) LIKE '%opus 4 6%'          THEN 'opus-4.6'
       WHEN LOWER(b.sku_description) LIKE '%opus 4.5%'
