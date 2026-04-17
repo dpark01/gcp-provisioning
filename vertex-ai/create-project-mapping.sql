@@ -28,6 +28,9 @@ VALUES
   ('coding-carze',    'single_user', 'carze@broadinstitute.org'),
   ('coding-lluebber', 'single_user', 'lluebber@broadinstitute.org'),
   ('coding-pvarilly', 'single_user', 'pvarilly@broadinstitute.org'),
+  -- sabeti-librechat: hosted LibreChat app, single service account hits Vertex.
+  -- Per-user audit attribution isn't possible; lumped under an app-level "user".
+  ('sabeti-librechat','single_user', 'sabeti-librechat@broadinstitute.org'),
   ('gcid-data-core',  'shared',      NULL),
   ('sabeti-ai',       'shared',      NULL),
   ('sabeti-encode',   'shared',      NULL),
