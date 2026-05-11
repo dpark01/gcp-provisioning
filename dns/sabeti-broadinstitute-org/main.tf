@@ -34,3 +34,11 @@ resource "google_dns_managed_zone" "sabeti_broadinstitute_org" {
     }
   }
 }
+
+resource "google_dns_record_set" "chat" {
+  name         = "chat.sabeti.broadinstitute.org."
+  managed_zone = google_dns_managed_zone.sabeti_broadinstitute_org.name
+  type         = "CNAME"
+  ttl          = 300
+  rrdatas      = ["ghs.googlehosted.com."]
+}
