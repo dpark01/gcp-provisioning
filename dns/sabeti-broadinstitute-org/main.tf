@@ -43,6 +43,14 @@ resource "google_dns_record_set" "chat" {
   rrdatas      = ["ghs.googlehosted.com."]
 }
 
+resource "google_dns_record_set" "carmen_analysis" {
+  name         = "carmen-analysis.sabeti.broadinstitute.org."
+  managed_zone = google_dns_managed_zone.sabeti_broadinstitute_org.name
+  type         = "CNAME"
+  ttl          = 300
+  rrdatas      = ["ghs.googlehosted.com."]
+}
+
 resource "google_dns_record_set" "google_site_verification" {
   name         = "sabeti.broadinstitute.org."
   managed_zone = google_dns_managed_zone.sabeti_broadinstitute_org.name
