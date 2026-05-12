@@ -42,3 +42,11 @@ resource "google_dns_record_set" "chat" {
   ttl          = 300
   rrdatas      = ["ghs.googlehosted.com."]
 }
+
+resource "google_dns_record_set" "google_site_verification" {
+  name         = "sabeti.broadinstitute.org."
+  managed_zone = google_dns_managed_zone.sabeti_broadinstitute_org.name
+  type         = "TXT"
+  ttl          = 300
+  rrdatas      = ["google-site-verification=xuEG5vQyP01V9Beeqwe8WmW-Xq0IzPbUvUvLv1f1STQ"]
+}
