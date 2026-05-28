@@ -193,6 +193,10 @@ ELSE          → LOWER(sku_description) (graceful fallback)
 
 **Maintenance**: New snapshots within a sub-version (e.g., `claude-sonnet-4-5-20260601`) need zero updates — the wildcards catch them. A new sub-version (e.g., Opus 4.7) requires adding one WHEN clause to each of two SQL files, placed *before* the base version pattern. Until updated, unrecognized models fall through to the ELSE with the raw name visible in the dashboard.
 
+> **Onboarding a whole new model** (views + project enablement + IT org-policy ticket)
+> is documented end-to-end in **`NEW_MODEL_RUNBOOK.md`**. The SQL edit described here
+> is just Step 1 of that runbook.
+
 **ELSE behavior for shared projects**: Raw names from the two sides won't match each other, so costs go to `user_email = 'unattributed'` with the raw SKU visible. This prevents false cross-attribution between different unknown models.
 
 ### Audit log sinks — no user permissions needed
@@ -412,3 +416,4 @@ ORDER BY total_cost DESC;
 | `vertex-ai/create-user-costs-view.sql` | Main unified per-user cost view (reads from union view) |
 | `vertex-ai/setup-audit-sink.sh` | Script to configure audit log sink for shared projects |
 | `vertex-ai/setup-billing-export.sh` | Creates BQ dataset + prints Cloud Console instructions for billing export |
+| `vertex-ai/NEW_MODEL_RUNBOOK.md` | Reusable runbook for onboarding a new Claude model (views + enablement + IT ticket) |
