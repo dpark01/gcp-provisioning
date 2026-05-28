@@ -164,7 +164,8 @@ claude-3-5-haiku%   → haiku-3.5
 claude-3-opus%      → opus-3
 claude-sonnet-4-5%  → sonnet-4.5      (before sonnet-4 — first match wins)
 claude-sonnet-4%    → sonnet-4
-claude-opus-4-6%    → opus-4.6        (before opus-4 — first match wins)
+claude-opus-4-8%    → opus-4.8        (before opus-4 — first match wins)
+claude-opus-4-6%    → opus-4.6
 claude-opus-4-5%    → opus-4.5
 claude-opus-4-1%    → opus-4.1
 claude-opus-4%      → opus-4
@@ -180,9 +181,10 @@ ELSE                → raw model_name (graceful fallback)
 %opus 3%      → opus-3
 %sonnet 4.5%  → sonnet-4.5            (before sonnet 4 — first match wins)
 %sonnet 4%    → sonnet-4
-%opus 4.6%    → opus-4.6              (before opus 4 — first match wins)
-%opus 4.5%    → opus-4.5              (Google uses both dots and spaces:
-%opus 4.1%    → opus-4.1               "Opus 4.1" vs "Opus 4 5" vs "Opus 4 6")
+%opus 4.8%    → opus-4.8              (before opus 4 — first match wins)
+%opus 4.6%    → opus-4.6              (Google uses both dots and spaces:
+%opus 4.5%    → opus-4.5               "Opus 4.1" vs "Opus 4 5" vs "Opus 4 6" vs "Opus 4 8")
+%opus 4.1%    → opus-4.1
 %opus 4%      → opus-4
 %haiku 4.5%   → haiku-4.5             (before haiku 4 — first match wins)
 %haiku 4%     → haiku-4
