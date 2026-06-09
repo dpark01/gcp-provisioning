@@ -32,6 +32,7 @@ SELECT
          OR LOWER(b.service.description) LIKE '%opus%'
          OR LOWER(b.service.description) LIKE '%sonnet%'
          OR LOWER(b.service.description) LIKE '%haiku%'
+         OR LOWER(b.service.description) LIKE '%fable%'
       THEN 'Vertex AI'
     WHEN b.service.description = 'Networking' THEN 'Networking'
     WHEN b.service.description = 'Support' THEN 'Support'

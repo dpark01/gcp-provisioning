@@ -58,6 +58,9 @@ WITH billing_with_model AS (
         OR LOWER(b.sku_description) LIKE '%haiku 4 5%'         THEN 'haiku-4.5'
       WHEN LOWER(b.sku_description) LIKE '%haiku 4%'
         OR LOWER(b.sku_description) LIKE '%haiku-4%'            THEN 'haiku-4'
+      -- Claude 5.x models
+      WHEN LOWER(b.sku_description) LIKE '%fable 5%'
+        OR LOWER(b.sku_description) LIKE '%fable-5%'            THEN 'fable-5'
       -- Gemini models
       WHEN LOWER(b.sku_description) LIKE '%gemini 2.5 flash%'  THEN 'gemini-2.5-flash'
       WHEN LOWER(b.sku_description) LIKE '%gemini 2.5 pro%'    THEN 'gemini-2.5-pro'

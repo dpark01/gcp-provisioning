@@ -62,6 +62,8 @@ SELECT
     WHEN model_name LIKE 'claude-opus-4%'          THEN 'opus-4'
     WHEN model_name LIKE 'claude-haiku-4-5%'       THEN 'haiku-4.5'
     WHEN model_name LIKE 'claude-haiku-4%'         THEN 'haiku-4'
+    -- Claude 5.x models
+    WHEN model_name LIKE 'claude-fable-5%'         THEN 'fable-5'
     -- Gemini models: sub-versions BEFORE base version
     WHEN model_name LIKE 'gemini-2.5-flash%'       THEN 'gemini-2.5-flash'
     WHEN model_name LIKE 'gemini-2.5-pro%'         THEN 'gemini-2.5-pro'

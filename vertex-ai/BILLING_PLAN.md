@@ -171,6 +171,7 @@ claude-opus-4-1%    → opus-4.1
 claude-opus-4%      → opus-4
 claude-haiku-4-5%   → haiku-4.5       (before haiku-4 — first match wins)
 claude-haiku-4%     → haiku-4
+claude-fable-5%     → fable-5
 ELSE                → raw model_name (graceful fallback)
 ```
 
@@ -188,6 +189,7 @@ ELSE                → raw model_name (graceful fallback)
 %opus 4%      → opus-4
 %haiku 4.5%   → haiku-4.5             (before haiku 4 — first match wins)
 %haiku 4%     → haiku-4
+%fable 5%     → fable-5
 ELSE          → LOWER(sku_description) (graceful fallback)
 ```
 
