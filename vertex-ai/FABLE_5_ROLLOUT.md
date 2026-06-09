@@ -18,12 +18,14 @@ Modified files:
 - `billing-reporting/refresh-materialized-billing.sh` — Added `%fable%` to service_category
 - `vertex-ai/BILLING_PLAN.md` — Updated model family reference blocks
 
-**Deployment**:
+**Deployment**: ✅ DEPLOYED (2026-06-09)
 
 ```bash
 bq query --nouse_legacy_sql --project_id=gcid-data-core < vertex-ai/create-audit-views.sql
 bq query --nouse_legacy_sql --project_id=gcid-data-core < vertex-ai/create-user-costs-view.sql
 ```
+
+Both views successfully replaced in `gcid-data-core.custom_sada_billing_views`.
 
 ## Step 2: Enablement (Model Garden)
 
@@ -113,7 +115,7 @@ GROUP BY 1, 2, 3 ORDER BY 4 DESC;
 - [x] Step 1: Update `BILLING_PLAN.md` pattern blocks
 - [x] Step 1: Add `%fable%` to general billing pipeline service_category
 - [x] Step 1: Commit changes
-- [ ] Step 1: Deploy views to `gcid-data-core`
+- [x] Step 1: Deploy views to `gcid-data-core`
 - [ ] Step 2: Enable model in Model Garden for all 11 projects
 - [ ] Step 3: File IT ticket for org policy allowlist
 - [ ] Step 4: Verify audit/cost normalization, WebSearch, Looker
