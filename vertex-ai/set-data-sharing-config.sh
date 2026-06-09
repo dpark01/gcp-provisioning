@@ -25,14 +25,9 @@ fi
 PROJECT_ID="$1"
 SINGLE_MODEL="${2:-}"
 
-# Common Claude models - add more as needed
+# Only enable for Fable 5 - do NOT enable for Opus/Sonnet/Haiku
 MODELS=(
   "claude-fable-5"
-  "claude-opus-4-8"
-  "claude-opus-4-7"
-  "claude-opus-4-6"
-  "claude-sonnet-4-6"
-  "claude-haiku-4-5"
 )
 
 # If a single model was specified, only process that one
